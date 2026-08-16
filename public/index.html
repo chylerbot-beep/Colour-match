@@ -195,6 +195,13 @@
                 <input type="range" id="finishTexture" min="0" max="100" value="45" />
               </div>
               <div class="control-group compact" style="grid-column: 1 / -1; margin-top: 8px;">
+                <label class="upscale-option" for="structuralToggle">
+                  <input id="structuralToggle" type="checkbox" />
+                  <span class="upscale-switch" aria-hidden="true"></span>
+                  <span>Enable Canny &amp; Depth Map</span>
+                </label>
+              </div>
+              <div class="control-group compact" style="grid-column: 1 / -1; margin-top: 8px;">
                 <label class="upscale-option" for="blueCastToggleSidebar">
                   <input id="blueCastToggleSidebar" class="blue-cast-toggle" type="checkbox" />
                   <span class="upscale-switch" aria-hidden="true"></span>
@@ -333,6 +340,14 @@
             <input class="split-slider" id="splitSlider" type="range" min="0" max="100" value="50" aria-label="Before after split" />
             <div class="badge before-badge">BEFORE</div>
             <div class="badge after-badge">AFTER</div>
+          </div>
+
+          <div class="structural-preview hidden" id="structuralPreview" aria-live="polite">
+            <div class="mini-head"><span>ControlNet structural maps</span><small id="structuralStatus">Toggle on to generate</small></div>
+            <div class="structural-map-grid">
+              <figure><canvas id="cannyCanvas"></canvas><figcaption>Canny line art</figcaption></figure>
+              <figure><canvas id="depthCanvas"></canvas><figcaption>Depth map</figcaption></figure>
+            </div>
           </div>
 
           <div class="result-note" id="resultNote">Load a reference and target images to begin.</div>
