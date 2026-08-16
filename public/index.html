@@ -194,6 +194,13 @@
                 <label><span>Finish texture</span><output id="finishTextureOut">45</output></label>
                 <input type="range" id="finishTexture" min="0" max="100" value="45" />
               </div>
+              <div class="control-group compact" style="grid-column: 1 / -1; margin-top: 8px;">
+                <label class="upscale-option" for="blueCastToggle">
+                  <input id="blueCastToggle" type="checkbox" />
+                  <span class="upscale-switch" aria-hidden="true"></span>
+                  <span>Fix Blue Cast (Mixed Light)</span>
+                </label>
+              </div>
             </div>
           </details>
 
@@ -368,7 +375,7 @@
     </footer>
   </div>
 
-  <script src="https://docs.opencv.org/4.8.0/opencv.js" async></script>
+  <script async src="https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.9.0-release.1/dist/opencv.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.webgpu.min.js"></script>
   <script src="vendor/pica.min.js"></script>
   <script src="ai-upscaler.js"></script>

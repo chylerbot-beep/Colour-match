@@ -49,6 +49,7 @@
     exportJpgBtn: $('exportJpgBtn'),
     exportAllBtn: $('exportAllBtn'),
     upscale2x: $('upscale2x'),
+    blueCastToggle: $('blueCastToggle'),
     batchFormat: $('batchFormat'),
     batchProgress: $('batchProgress'),
     batchProgressBar: $('batchProgressBar'),
@@ -773,6 +774,61 @@
     }
   }
 
+  function applyFixBlueCast(imageData) {
+    if (!window.cv || !window.cv.Mat || typeof window.cv.cvtColor !== 'function') {
+      return;
+    }
+    let src = null, rgb = null, hsv = null, mask = null, hsvVec = null, hMat = null, sMat = null, vMat = null, dst = null, low = null, high = null;
+    try {
+      src = cv.matFromImageData(imageData);
+      rgb = new cv.Mat();
+      hsv = new cv.Mat();
+      mask = new cv.Mat();
+
+      // a. Convert the image to HSV
+      cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB);
+      cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
+
+      // b. Create an inRange mask targeting bright/neon blue hues (OpenCV Hue ~90-130)
+      low = cv.matFromArray(1, 3, cv.CV_8U, [90, 40, 40]);
+      high = cv.matFromArray(1, 3, cv.CV_8U, [130, 255, 255]);
+      cv.inRange(hsv, low, high, mask);
+
+      // c. Desaturate (lower Saturation) the masked area to neutralize blue window glare into neutral grey/white
+      hsvVec = new cv.MatVector();
+      cv.split(hsv, hsvVec);
+      hMat = hsvVec.get(0);
+      sMat = hsvVec.get(1);
+      vMat = hsvVec.get(2);
+
+      sMat.setTo(new cv.Scalar(0), mask);
+
+      cv.merge(hsvVec, hsv);
+
+      // d. Convert back to RGB/RGBA
+      dst = new cv.Mat();
+      cv.cvtColor(hsv, rgb, cv.COLOR_HSV2RGB);
+      cv.cvtColor(rgb, dst, cv.COLOR_RGB2RGBA);
+
+      imageData.data.set(dst.data);
+    } catch (err) {
+      console.warn('Fix Blue Cast error:', err);
+    } finally {
+      // Properly call .delete() on temporary matrices to avoid memory leaks
+      if (src) src.delete();
+      if (rgb) rgb.delete();
+      if (hsv) hsv.delete();
+      if (mask) mask.delete();
+      if (low) low.delete();
+      if (high) high.delete();
+      if (hMat) hMat.delete();
+      if (sMat) sMat.delete();
+      if (vMat) vMat.delete();
+      if (hsvVec) hsvVec.delete();
+      if (dst) dst.delete();
+    }
+  }
+
   function processPixels(imageData, w, h, srcStats, refStats, params) {
     const d = imageData.data, luts = { master: curveLUT(state.curves.master), r: curveLUT(state.curves.r), g: curveLUT(state.curves.g), b: curveLUT(state.curves.b) };
     let seed = 1337; const rand = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 - .5; };
@@ -783,7 +839,11 @@
         d[i] = r; d[i + 1] = g; d[i + 2] = b;
       }
     }
-    applyDetailMatch(imageData, w, h, srcStats, refStats, params); return imageData;
+    applyDetailMatch(imageData, w, h, srcStats, refStats, params);
+    if (refs.blueCastToggle && refs.blueCastToggle.checked) {
+      applyFixBlueCast(imageData);
+    }
+    return imageData;
   }
 
   function drawPreview() {
@@ -1245,6 +1305,7 @@
   refs.prevTargetBtn.addEventListener('click', () => selectRelative(-1)); refs.nextTargetBtn.addEventListener('click', () => selectRelative(1));
   refs.exportBtn.addEventListener('click', () => exportCurrent('image/png')); refs.exportJpgBtn.addEventListener('click', () => exportCurrent('image/jpeg', .94)); refs.exportAllBtn.addEventListener('click', exportAllZip); refs.exportLutBtn.addEventListener('click', exportLut);
   refs.upscale2x.addEventListener('change', () => { if (activeTarget() && state.referenceStats) drawPreview(); });
+  if (refs.blueCastToggle) refs.blueCastToggle.addEventListener('change', () => { if (activeTarget() && state.referenceStats) drawPreview(); });
   refs.saveProfileBtn.addEventListener('click', saveProfile); refs.loadProfileInput.addEventListener('change', loadProfile); window.addEventListener('resize', syncCompareSize);
   refs.pasteToReferencesBtn.addEventListener('click', e => { e.preventDefault(); setPasteDestination('reference'); refs.pasteToReferencesBtn.focus(); });
   refs.pasteToTargetsBtn.addEventListener('click', e => { e.preventDefault(); setPasteDestination('target'); refs.pasteToTargetsBtn.focus(); });
