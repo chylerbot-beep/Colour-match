@@ -49,6 +49,7 @@
     exportJpgBtn: $('exportJpgBtn'),
     exportAllBtn: $('exportAllBtn'),
     upscale2x: $('upscale2x'),
+    blueCastToggle: $('blueCastToggle'),
     batchFormat: $('batchFormat'),
     batchProgress: $('batchProgress'),
     batchProgressBar: $('batchProgressBar'),
@@ -537,8 +538,7 @@
       warmth: +controls.warmth.value / 100 + c.warmth / 100,
       tint: +controls.tint.value / 100 + c.tint / 100,
       saturation: +controls.saturation.value / 100,
-      grain: +controls.grain.value / 100,
-      agxAmount: ($('#agxToggleSidebar')?.checked) ? Number($('#agxAmount')?.value || 80) / 100 : 0
+      grain: +controls.grain.value / 100
     };
   }
 
@@ -640,24 +640,14 @@
     return hslToRgb(h, s, l);
   }
 
-  function applyHighlightRolloff(r, g, b, amount) {
-    if (!amount) return [r, g, b];
-    const original = [r, g, b];
-    const toLinear = value => Math.pow(clamp(value) / 255, 2.2);
-    const fromLinear = value => clamp(Math.pow(clamp01(value), 1 / 2.2) * 255);
-    const agxCurve = x => clamp01(15.5 * x ** 5 - 40.14 * x ** 4 + 31.96 * x ** 3 - 6.868 * x ** 2 + 0.4298 * x + 0.1191);
-    const logEncode = value => clamp01((Math.log2(Math.max(value, 1e-6)) + 10) / 12.5);
-    const lr = toLinear(r), lg = toLinear(g), lb = toLinear(b);
-    const ax = 0.842479 * lr + 0.078434 * lg + 0.079224 * lb;
-    const ay = 0.042328 * lr + 0.878469 * lg + 0.079166 * lb;
-    const az = 0.042376 * lr + 0.078434 * lg + 0.879143 * lb;
-    const cx = agxCurve(logEncode(ax));
-    const cy = agxCurve(logEncode(ay));
-    const cz = agxCurve(logEncode(az));
-    const outR = fromLinear(1.196879 * cx - 0.0980209 * cy - 0.0990297 * cz);
-    const outG = fromLinear(-0.0528969 * cx + 1.107563 * cy - 0.0545984 * cz);
-    const outB = fromLinear(-0.0529716 * cx - 0.0980435 * cy + 1.151073 * cz);
-    return [lerp(original[0], outR, amount), lerp(original[1], outG, amount), lerp(original[2], outB, amount)];
+  function applyHighlightRolloff(y, refStats, amount) {
+    if (!amount || y <= .68) return y;
+    const start = clamp(refStats.p75 + .035, .68, .84);
+    if (y <= start) return y;
+    const ceiling = clamp(refStats.p99 + .012, .91, .992);
+    const t = clamp01((y - start) / Math.max(.02, 1 - start));
+    const shaped = 1 - Math.pow(1 - t, 1.32);
+    return clamp01(lerp(y, start + (ceiling - start) * shaped, amount));
   }
 
   function transformRGB(r, g, b, srcStats, refStats, params, luts, noise = 0, nx = .5, ny = .5) {
@@ -677,6 +667,7 @@
     if (params.contrast) y = clamp01((y - .5) * (1 + params.contrast * .8) + .5);
     if (params.shadows) { const m = Math.pow(1 - y, 2.2); y = clamp01(y + params.shadows * .16 * m); }
     if (params.highlights) { const m = Math.pow(y, 2.2); y = clamp01(y + params.highlights * .13 * m); }
+    y = applyHighlightRolloff(y, refStats, params.highlightRolloff * overall);
     if (params.clipProtect) {
       const p = params.clipProtect;
       if (srcStats.clippedHi > .003 || y > .92) { const shoulder = .92, over = Math.max(0, y - shoulder); y = shoulder + over / (1 + over * (5 + 6 * p)); }
@@ -712,7 +703,6 @@
       const lmask = .4 + .6 * (1 - Math.abs(originalY - .5) * 1.6), n = noise * 255 * params.grain * .065;
       r += n * lmask; g += n * lmask; b += n * lmask;
     }
-    [r, g, b] = applyHighlightRolloff(r, g, b, params.agxAmount);
     return [clamp(r), clamp(g), clamp(b)];
   }
 
@@ -784,6 +774,67 @@
     }
   }
 
+  function applyFixBlueCast(imageData, params) {
+    const d = imageData.data;
+    const totalPixels = d.length;
+    
+    // Target hues between Cyan and Deep Blue (roughly 190 to 260)
+    const centerBlue = 225; 
+
+    for (let i = 0; i < totalPixels; i += 4) {
+      // Ignore transparent/nearly transparent pixels
+      if (d[i + 3] < 20) continue; 
+
+      const r = d[i];
+      const g = d[i + 1];
+      const b = d[i + 2];
+
+      let [h, s, l] = rgbToHsl(r, g, b);
+
+      // 1. HUE FEATHERING: Smooth falloff based on how close the pixel is to target blue
+      const dist = circularDistance(h, centerBlue);
+      const hueWeight = dist < 50 ? Math.pow(1 - dist / 50, 1.5) : 0;
+
+      if (hueWeight > 0) {
+        // 2. LUMINANCE FEATHERING: Protect deep shadows from turning grey
+        const lumWeight = smoothstep(0.15, 0.70, l);
+
+        // 3. SATURATION FEATHERING: Ignore pixels that are already neutral
+        const satWeight = smoothstep(0.05, 0.40, s);
+
+        // Combine weights for a butter-smooth alpha mask (0.0 to 1.0)
+        const totalWeight = hueWeight * lumWeight * satWeight;
+
+        if (totalWeight > 0.01) {
+          // Smoothly reduce saturation by up to 85%, leaving a tiny bit of natural color
+          s = lerp(s, s * 0.15, totalWeight * 0.9);
+
+          // Gently shift the hue warmer (towards cyan/white) to match daylight
+          h = lerp(h, 195, totalWeight * 0.5);
+
+          // Counter the "grey-out" effect by slightly lifting the brightness of neutralized pixels
+          l = lerp(l, clamp01(l + 0.04), totalWeight * 0.5);
+
+          // Sync with the global warmth slider to blend it into the room seamlessly
+          if (params && params.warmth !== undefined) {
+              l = clamp01(l + (params.warmth * 0.02 * totalWeight));
+          }
+
+          // Convert back to RGB and apply
+          const [nr, ng, nb] = hslToRgb(h, s, l);
+          d[i] = nr;
+          d[i + 1] = ng;
+          d[i + 2] = nb;
+        }
+      }
+    }
+  }
+
+  function isBlueCastEnabled() {
+    const toggle = document.querySelector('.blue-cast-toggle, #blueCastToggleSidebar, #blueCastToggleExport, #blueCastToggle');
+    return toggle ? toggle.checked : false;
+  }
+
   function processPixels(imageData, w, h, srcStats, refStats, params) {
     const d = imageData.data, luts = { master: curveLUT(state.curves.master), r: curveLUT(state.curves.r), g: curveLUT(state.curves.g), b: curveLUT(state.curves.b) };
     let seed = 1337; const rand = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 - .5; };
@@ -796,6 +847,9 @@
     }
     applyDetailMatch(imageData, w, h, srcStats, refStats, params);
     
+    if (isBlueCastEnabled()) {
+      applyFixBlueCast(imageData, params);
+    }
     return imageData;
   }
 
@@ -1258,22 +1312,12 @@
   refs.prevTargetBtn.addEventListener('click', () => selectRelative(-1)); refs.nextTargetBtn.addEventListener('click', () => selectRelative(1));
   refs.exportBtn.addEventListener('click', () => exportCurrent('image/png')); refs.exportJpgBtn.addEventListener('click', () => exportCurrent('image/jpeg', .94)); refs.exportAllBtn.addEventListener('click', exportAllZip); refs.exportLutBtn.addEventListener('click', exportLut);
   refs.upscale2x.addEventListener('change', () => { if (activeTarget() && state.referenceStats) drawPreview(); });
-  const agxToggles = document.querySelectorAll('.agx-toggle, #agxToggleSidebar, #agxToggleExport');
-  agxToggles.forEach(toggle => {
+  const blueCastToggles = document.querySelectorAll('.blue-cast-toggle, #blueCastToggleSidebar, #blueCastToggleExport, #blueCastToggle');
+  blueCastToggles.forEach(toggle => {
     toggle.addEventListener('change', e => {
       const isChecked = e.target.checked;
-      agxToggles.forEach(t => { t.checked = isChecked; });
-      updateOutputs();
-      scheduleProcess();
-    });
-  });
-  const agxAmounts = document.querySelectorAll('.agx-amount, #agxAmount');
-  agxAmounts.forEach(slider => {
-    slider.addEventListener('input', e => {
-      agxAmounts.forEach(input => { if (input !== e.target) input.value = e.target.value; });
-      document.querySelectorAll('.agx-amount-value, #agxAmountVal').forEach(label => { label.textContent = `${e.target.value}%`; });
-      updateOutputs();
-      scheduleProcess();
+      blueCastToggles.forEach(t => { t.checked = isChecked; });
+      if (activeTarget() && state.referenceStats) drawPreview();
     });
   });
   refs.saveProfileBtn.addEventListener('click', saveProfile); refs.loadProfileInput.addEventListener('change', loadProfile); window.addEventListener('resize', syncCompareSize);
