@@ -830,6 +830,11 @@
     }
   }
 
+  function isBlueCastEnabled() {
+    const toggle = document.querySelector('.blue-cast-toggle, #blueCastToggleSidebar, #blueCastToggleExport, #blueCastToggle');
+    return toggle ? toggle.checked : false;
+  }
+
   function processPixels(imageData, w, h, srcStats, refStats, params) {
     const d = imageData.data, luts = { master: curveLUT(state.curves.master), r: curveLUT(state.curves.r), g: curveLUT(state.curves.g), b: curveLUT(state.curves.b) };
     let seed = 1337; const rand = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 - .5; };
@@ -842,8 +847,7 @@
     }
     applyDetailMatch(imageData, w, h, srcStats, refStats, params);
     
-    // UPDATED: Now passes 'params' so the blue cast fix can sync with UI sliders
-    if (refs.blueCastToggle && refs.blueCastToggle.checked) {
+    if (isBlueCastEnabled()) {
       applyFixBlueCast(imageData, params);
     }
     return imageData;
@@ -1308,7 +1312,14 @@
   refs.prevTargetBtn.addEventListener('click', () => selectRelative(-1)); refs.nextTargetBtn.addEventListener('click', () => selectRelative(1));
   refs.exportBtn.addEventListener('click', () => exportCurrent('image/png')); refs.exportJpgBtn.addEventListener('click', () => exportCurrent('image/jpeg', .94)); refs.exportAllBtn.addEventListener('click', exportAllZip); refs.exportLutBtn.addEventListener('click', exportLut);
   refs.upscale2x.addEventListener('change', () => { if (activeTarget() && state.referenceStats) drawPreview(); });
-  if (refs.blueCastToggle) refs.blueCastToggle.addEventListener('change', () => { if (activeTarget() && state.referenceStats) drawPreview(); });
+  const blueCastToggles = document.querySelectorAll('.blue-cast-toggle, #blueCastToggleSidebar, #blueCastToggleExport, #blueCastToggle');
+  blueCastToggles.forEach(toggle => {
+    toggle.addEventListener('change', e => {
+      const isChecked = e.target.checked;
+      blueCastToggles.forEach(t => { t.checked = isChecked; });
+      if (activeTarget() && state.referenceStats) drawPreview();
+    });
+  });
   refs.saveProfileBtn.addEventListener('click', saveProfile); refs.loadProfileInput.addEventListener('change', loadProfile); window.addEventListener('resize', syncCompareSize);
   refs.pasteToReferencesBtn.addEventListener('click', e => { e.preventDefault(); setPasteDestination('reference'); refs.pasteToReferencesBtn.focus(); });
   refs.pasteToTargetsBtn.addEventListener('click', e => { e.preventDefault(); setPasteDestination('target'); refs.pasteToTargetsBtn.focus(); });
