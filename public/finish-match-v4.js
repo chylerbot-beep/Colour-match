@@ -774,58 +774,59 @@
     }
   }
 
-  function applyFixBlueCast(imageData) {
-    if (!window.cv || !window.cv.Mat || typeof window.cv.cvtColor !== 'function') {
-      return;
-    }
-    let src = null, rgb = null, hsv = null, mask = null, hsvVec = null, hMat = null, sMat = null, vMat = null, dst = null, low = null, high = null;
-    try {
-      src = cv.matFromImageData(imageData);
-      rgb = new cv.Mat();
-      hsv = new cv.Mat();
-      mask = new cv.Mat();
+  function applyFixBlueCast(imageData, params) {
+    const d = imageData.data;
+    const totalPixels = d.length;
+    
+    // Target hues between Cyan and Deep Blue (roughly 190 to 260)
+    const centerBlue = 225; 
 
-      // a. Convert the image to HSV
-      cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB);
-      cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
+    for (let i = 0; i < totalPixels; i += 4) {
+      // Ignore transparent/nearly transparent pixels
+      if (d[i + 3] < 20) continue; 
 
-      // b. Create an inRange mask targeting bright/neon blue hues (OpenCV Hue ~90-130)
-      low = cv.matFromArray(1, 3, cv.CV_8U, [90, 40, 40]);
-      high = cv.matFromArray(1, 3, cv.CV_8U, [130, 255, 255]);
-      cv.inRange(hsv, low, high, mask);
+      const r = d[i];
+      const g = d[i + 1];
+      const b = d[i + 2];
 
-      // c. Desaturate (lower Saturation) the masked area to neutralize blue window glare into neutral grey/white
-      hsvVec = new cv.MatVector();
-      cv.split(hsv, hsvVec);
-      hMat = hsvVec.get(0);
-      sMat = hsvVec.get(1);
-      vMat = hsvVec.get(2);
+      let [h, s, l] = rgbToHsl(r, g, b);
 
-      sMat.setTo(new cv.Scalar(0), mask);
+      // 1. HUE FEATHERING: Smooth falloff based on how close the pixel is to target blue
+      const dist = circularDistance(h, centerBlue);
+      const hueWeight = dist < 50 ? Math.pow(1 - dist / 50, 1.5) : 0;
 
-      cv.merge(hsvVec, hsv);
+      if (hueWeight > 0) {
+        // 2. LUMINANCE FEATHERING: Protect deep shadows from turning grey
+        const lumWeight = smoothstep(0.15, 0.70, l);
 
-      // d. Convert back to RGB/RGBA
-      dst = new cv.Mat();
-      cv.cvtColor(hsv, rgb, cv.COLOR_HSV2RGB);
-      cv.cvtColor(rgb, dst, cv.COLOR_RGB2RGBA);
+        // 3. SATURATION FEATHERING: Ignore pixels that are already neutral
+        const satWeight = smoothstep(0.05, 0.40, s);
 
-      imageData.data.set(dst.data);
-    } catch (err) {
-      console.warn('Fix Blue Cast error:', err);
-    } finally {
-      // Properly call .delete() on temporary matrices to avoid memory leaks
-      if (src) src.delete();
-      if (rgb) rgb.delete();
-      if (hsv) hsv.delete();
-      if (mask) mask.delete();
-      if (low) low.delete();
-      if (high) high.delete();
-      if (hMat) hMat.delete();
-      if (sMat) sMat.delete();
-      if (vMat) vMat.delete();
-      if (hsvVec) hsvVec.delete();
-      if (dst) dst.delete();
+        // Combine weights for a butter-smooth alpha mask (0.0 to 1.0)
+        const totalWeight = hueWeight * lumWeight * satWeight;
+
+        if (totalWeight > 0.01) {
+          // Smoothly reduce saturation by up to 85%, leaving a tiny bit of natural color
+          s = lerp(s, s * 0.15, totalWeight * 0.9);
+
+          // Gently shift the hue warmer (towards cyan/white) to match daylight
+          h = lerp(h, 195, totalWeight * 0.5);
+
+          // Counter the "grey-out" effect by slightly lifting the brightness of neutralized pixels
+          l = lerp(l, clamp01(l + 0.04), totalWeight * 0.5);
+
+          // Sync with the global warmth slider to blend it into the room seamlessly
+          if (params && params.warmth !== undefined) {
+              l = clamp01(l + (params.warmth * 0.02 * totalWeight));
+          }
+
+          // Convert back to RGB and apply
+          const [nr, ng, nb] = hslToRgb(h, s, l);
+          d[i] = nr;
+          d[i + 1] = ng;
+          d[i + 2] = nb;
+        }
+      }
     }
   }
 
@@ -840,8 +841,10 @@
       }
     }
     applyDetailMatch(imageData, w, h, srcStats, refStats, params);
+    
+    // UPDATED: Now passes 'params' so the blue cast fix can sync with UI sliders
     if (refs.blueCastToggle && refs.blueCastToggle.checked) {
-      applyFixBlueCast(imageData);
+      applyFixBlueCast(imageData, params);
     }
     return imageData;
   }
@@ -1301,7 +1304,7 @@
   refs.resetCurveBtn.addEventListener('click', () => { resetCurves(); scheduleProcess(); }); refs.autoTuneBtn.addEventListener('click', autoTuneCurrent); refs.autoTuneAllBtn.addEventListener('click', autoTuneAll);
   refs.mobileAutoTuneBtn.addEventListener('click', autoTuneCurrent); refs.mobileAutoTuneAllBtn.addEventListener('click', autoTuneAll);
   refs.resetBtn.addEventListener('click', resetSharedEdits); refs.resetCurrentBtn.addEventListener('click', resetCurrentCorrection);
-  refs.newTargetBtn.addEventListener('click', () => refs.targetInput.click()); refs.addTargetsBtn.addEventListener('click', () => refs.targetInput.click()); refs.newReferenceBtn.addEventListener('click', () => refs.referenceInput.click()); refs.addReferencesBtn.addEventListener('click', () => refs.referenceInput.click()); refs.clearReferencesBtn.addEventListener('click', clearReferences);
+  if (refs.newTargetBtn) refs.newTargetBtn.addEventListener('click', () => refs.targetInput.click()); if (refs.addTargetsBtn) refs.addTargetsBtn.addEventListener('click', () => refs.targetInput.click()); if (refs.newReferenceBtn) refs.newReferenceBtn.addEventListener('click', () => refs.referenceInput.click()); if (refs.addReferencesBtn) refs.addReferencesBtn.addEventListener('click', () => refs.referenceInput.click()); if (refs.clearReferencesBtn) refs.clearReferencesBtn.addEventListener('click', clearReferences);
   refs.prevTargetBtn.addEventListener('click', () => selectRelative(-1)); refs.nextTargetBtn.addEventListener('click', () => selectRelative(1));
   refs.exportBtn.addEventListener('click', () => exportCurrent('image/png')); refs.exportJpgBtn.addEventListener('click', () => exportCurrent('image/jpeg', .94)); refs.exportAllBtn.addEventListener('click', exportAllZip); refs.exportLutBtn.addEventListener('click', exportLut);
   refs.upscale2x.addEventListener('change', () => { if (activeTarget() && state.referenceStats) drawPreview(); });
@@ -1310,6 +1313,26 @@
   refs.pasteToReferencesBtn.addEventListener('click', e => { e.preventDefault(); setPasteDestination('reference'); refs.pasteToReferencesBtn.focus(); });
   refs.pasteToTargetsBtn.addEventListener('click', e => { e.preventDefault(); setPasteDestination('target'); refs.pasteToTargetsBtn.focus(); });
   refs.referenceDrop.querySelector('.card-head-copy').addEventListener('click', () => setPasteDestination('reference'));
-  refs.targetDrop.querySelector('.card-head-copy').addEventListener('click', () => setPasteDestination('target'));
+  async function loadDefaultReferences() {
+    const defaultFiles = [
+      { path: 'references/reference-1.png', name: 'reference-1.png' },
+      { path: 'references/reference-2.png', name: 'reference-2.png' },
+      { path: 'references/reference-3.jpg', name: 'reference-3.jpg' }
+    ];
+    try {
+      const files = [];
+      for (const item of defaultFiles) {
+        const resp = await fetch(item.path);
+        if (!resp.ok) continue;
+        const blob = await resp.blob();
+        files.push(new File([blob], item.name, { type: blob.type || (item.name.endsWith('.jpg') ? 'image/jpeg' : 'image/png') }));
+      }
+      if (files.length) await loadReferenceFiles(files);
+    } catch (err) {
+      console.warn('Could not load default reference photos:', err);
+    }
+  }
+
   document.addEventListener('paste', handlePaste);
+  loadDefaultReferences();
 })();

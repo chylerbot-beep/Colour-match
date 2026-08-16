@@ -345,9 +345,12 @@
                 <span class="upscale-switch" aria-hidden="true"></span>
                 <span>AI Super-Resolution (Real-ESRGAN)</span>
               </label>
-              <div class="button-row">
-                <button class="secondary-btn" id="newReferenceBtn" type="button">Add references</button>
-                <button class="secondary-btn" id="newTargetBtn" type="button">Add targets</button>
+              <div class="button-row" style="align-items: center;">
+                <label class="upscale-option" for="blueCastToggle">
+                  <input id="blueCastToggle" type="checkbox" />
+                  <span class="upscale-switch" aria-hidden="true"></span>
+                  <span>Fix Blue Cast</span>
+                </label>
                 <button class="secondary-btn" id="exportJpgBtn" type="button">Export JPG</button>
                 <button class="primary-btn" id="exportBtn" type="button">Export PNG</button>
               </div>
