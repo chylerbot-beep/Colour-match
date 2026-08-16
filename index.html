@@ -195,11 +195,15 @@
                 <input type="range" id="finishTexture" min="0" max="100" value="45" />
               </div>
               <div class="control-group compact" style="grid-column: 1 / -1; margin-top: 8px;">
-                <label class="upscale-option" for="blueCastToggleSidebar">
-                  <input id="blueCastToggleSidebar" class="blue-cast-toggle" type="checkbox" />
+                <label class="upscale-option" for="agxToggleSidebar">
+                  <input id="agxToggleSidebar" class="agx-toggle" type="checkbox" checked />
                   <span class="upscale-switch" aria-hidden="true"></span>
-                  <span>Fix Blue Cast (Mixed Light)</span>
+                  <span>Enable AgX Roll-Off</span>
                 </label>
+                <div class="slider-row" style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">
+                  <input id="agxAmount" class="agx-amount" type="range" min="0" max="100" value="80" step="1" style="flex: 1;" />
+                  <span id="agxAmountVal" class="agx-amount-value" style="min-width: 36px; font-size: 12px;">80%</span>
+                </div>
               </div>
             </div>
           </details>
@@ -346,10 +350,10 @@
                 <span>AI Super-Resolution (Real-ESRGAN)</span>
               </label>
               <div class="button-row" style="align-items: center;">
-                <label class="upscale-option" for="blueCastToggleExport">
-                  <input id="blueCastToggleExport" class="blue-cast-toggle" type="checkbox" />
+                <label class="upscale-option" for="agxToggleExport">
+                  <input id="agxToggleExport" class="agx-toggle" type="checkbox" checked />
                   <span class="upscale-switch" aria-hidden="true"></span>
-                  <span>Fix Blue Cast</span>
+                  <span>Enable AgX Roll-Off</span>
                 </label>
                 <button class="secondary-btn" id="exportJpgBtn" type="button">Export JPG</button>
                 <button class="primary-btn" id="exportBtn" type="button">Export PNG</button>
