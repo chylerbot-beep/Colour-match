@@ -5,7 +5,7 @@
 class AIUpscalerEngine {
   constructor() {
     this.session = null;
-    this.modelUrl = "https://huggingface.co/qualcomm/Real-ESRGAN-General-x4v3/resolve/main/Real-ESRGAN-General-x4v3.onnx";
+    this.modelUrl = "https://huggingface.co/SceneWorks/real-esrgan-onnx/resolve/main/real_esrgan_x4.onnx";
     // Fallback lightweight 2x/4x compact model URL or local /models/upscaler.onnx
     this.scale = 4; // Model scale factor
     this.tileSize = 256; // Base tile size for memory safety
