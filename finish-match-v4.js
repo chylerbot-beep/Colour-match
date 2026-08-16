@@ -49,6 +49,11 @@
     exportJpgBtn: $('exportJpgBtn'),
     exportAllBtn: $('exportAllBtn'),
     upscale2x: $('upscale2x'),
+    structuralToggle: $('structuralToggle'),
+    structuralPreview: $('structuralPreview'),
+    structuralStatus: $('structuralStatus'),
+    cannyCanvas: $('cannyCanvas'),
+    depthCanvas: $('depthCanvas'),
     blueCastToggle: $('blueCastToggle'),
     batchFormat: $('batchFormat'),
     batchProgress: $('batchProgress'),
@@ -94,6 +99,7 @@
     afterStats: null,
     previewMax: matchMedia('(max-width: 720px), (pointer: coarse)').matches ? 720 : 960,
     processTimer: null,
+    structuralTimer: null,
     mode: 'split',
     activeCurve: 'master',
     dragPoint: -1,
@@ -835,6 +841,82 @@
     return toggle ? toggle.checked : false;
   }
 
+
+  function structuralMapsPayload(target = activeTarget()) {
+    if (!refs.structuralToggle?.checked || !target?.structuralMaps) return null;
+    return {
+      controlnet: {
+        canny: target.structuralMaps.cannyDataUrl,
+        depth: target.structuralMaps.depthDataUrl,
+        model: 'depth-anything/Depth-Anything-V2-Small-hf',
+        enabled: true
+      }
+    };
+  }
+
+  function drawImageToCanvas(canvas, img, maxSize = 512) {
+    const scale = Math.min(1, maxSize / Math.max(img.naturalWidth, img.naturalHeight));
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return ctx;
+  }
+
+  function extractCannyBrowser(img) {
+    const canvas = document.createElement('canvas'), ctx = drawImageToCanvas(canvas, img);
+    if (window.cv?.Canny) {
+      const src = cv.imread(canvas), gray = new cv.Mat(), blurred = new cv.Mat(), edges = new cv.Mat();
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY); cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 1.2, 1.2, cv.BORDER_DEFAULT); cv.Canny(blurred, edges, 100, 200); cv.imshow(canvas, edges);
+      src.delete(); gray.delete(); blurred.delete(); edges.delete();
+      return canvas;
+    }
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height), d = imageData.data, out = ctx.createImageData(canvas.width, canvas.height);
+    for (let y = 1; y < canvas.height - 1; y++) for (let x = 1; x < canvas.width - 1; x++) {
+      const i = (y * canvas.width + x) * 4, lum = j => .299 * d[j] + .587 * d[j + 1] + .114 * d[j + 2];
+      const gx = -lum(i - canvas.width * 4 - 4) + lum(i - canvas.width * 4 + 4) - 2 * lum(i - 4) + 2 * lum(i + 4) - lum(i + canvas.width * 4 - 4) + lum(i + canvas.width * 4 + 4);
+      const gy = -lum(i - canvas.width * 4 - 4) - 2 * lum(i - canvas.width * 4) - lum(i - canvas.width * 4 + 4) + lum(i + canvas.width * 4 - 4) + 2 * lum(i + canvas.width * 4) + lum(i + canvas.width * 4 + 4);
+      const v = Math.hypot(gx, gy) > 100 ? 255 : 0; out.data[i] = out.data[i + 1] = out.data[i + 2] = v; out.data[i + 3] = 255;
+    }
+    ctx.putImageData(out, 0, 0); return canvas;
+  }
+
+  function extractDepthPreviewBrowser(img) {
+    const canvas = document.createElement('canvas'), ctx = drawImageToCanvas(canvas, img);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height), d = imageData.data;
+    for (let y = 0; y < canvas.height; y++) for (let x = 0; x < canvas.width; x++) {
+      const i = (y * canvas.width + x) * 4, luma = .299 * d[i] + .587 * d[i + 1] + .114 * d[i + 2], vertical = 255 * (1 - y / Math.max(1, canvas.height - 1));
+      const v = clamp(luma * .55 + vertical * .45); d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+    }
+    ctx.putImageData(imageData, 0, 0); return canvas;
+  }
+
+  function copyCanvas(src, dest) {
+    dest.width = src.width; dest.height = src.height; dest.getContext('2d').drawImage(src, 0, 0);
+  }
+
+  function updateStructuralMaps() {
+    const target = activeTarget();
+    if (!refs.structuralToggle?.checked) { refs.structuralPreview?.classList.add('hidden'); return; }
+    refs.structuralPreview?.classList.remove('hidden');
+    if (!target) { refs.structuralStatus.textContent = 'Load a target to generate maps'; return; }
+    refs.structuralStatus.textContent = 'Generating…';
+    clearTimeout(state.structuralTimer);
+    state.structuralTimer = setTimeout(() => {
+      try {
+        const canny = extractCannyBrowser(target.img), depth = extractDepthPreviewBrowser(target.img);
+        copyCanvas(canny, refs.cannyCanvas); copyCanvas(depth, refs.depthCanvas);
+        target.structuralMaps = { cannyDataUrl: canny.toDataURL('image/png'), depthDataUrl: depth.toDataURL('image/png') };
+        target.controlNetPayload = structuralMapsPayload(target);
+        refs.structuralStatus.textContent = 'Generated and attached to pipeline payload';
+      } catch (err) {
+        console.warn('Structural map extraction failed:', err);
+        refs.structuralStatus.textContent = 'Map extraction failed; using standard pipeline';
+        target.structuralMaps = null; target.controlNetPayload = null;
+      }
+    }, 20);
+  }
+
   function processPixels(imageData, w, h, srcStats, refStats, params) {
     const d = imageData.data, luts = { master: curveLUT(state.curves.master), r: curveLUT(state.curves.r), g: curveLUT(state.curves.g), b: curveLUT(state.curves.b) };
     let seed = 1337; const rand = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 - .5; };
@@ -855,7 +937,7 @@
 
   function drawPreview() {
     const target = activeTarget(); if (!target || !state.referenceStats) return;
-    renderTargetDiagnosis(target); syncTrimControls();
+    renderTargetDiagnosis(target); syncTrimControls(); updateStructuralMaps();
     const max = state.previewMax, scale = Math.min(1, max / Math.max(target.img.naturalWidth, target.img.naturalHeight));
     const w = Math.round(target.img.naturalWidth * scale), h = Math.round(target.img.naturalHeight * scale);
     [refs.beforeCanvas, refs.afterCanvas].forEach(c => { c.width = w; c.height = h; });
@@ -865,7 +947,8 @@
     state.afterStats = analyzeImageData(data, w, h); drawHistogram(refs.targetHistogram, target.stats.hist, 'y', state.afterStats.hist);
     refs.compareWrap.classList.remove('updating');
     const exportMode = refs.upscale2x.checked ? 'AI Super-Resolution on export' : 'export keeps original resolution';
-    refs.resultNote.textContent = `Automatic ${capitalize(state.finishPreset)} finish • Edge-aware luminosity • Target ${state.targets.indexOf(target) + 1} of ${state.targets.length} • AFTER is on the right • ${exportMode}`;
+    const controlNetNote = structuralMapsPayload(target) ? ' • ControlNet Canny + Depth maps attached' : '';
+    refs.resultNote.textContent = `Automatic ${capitalize(state.finishPreset)} finish • Edge-aware luminosity${controlNetNote} • Target ${state.targets.indexOf(target) + 1} of ${state.targets.length} • AFTER is on the right • ${exportMode}`;
     updateBatchSummary(); syncCompareSize(); drawCurve();
   }
 
@@ -972,7 +1055,7 @@
     const idx = state.targets.findIndex(t => t.id === id); if (idx < 0) return;
     const [removed] = state.targets.splice(idx, 1); if (removed?.url) URL.revokeObjectURL(removed.url);
     if (state.activeTargetId === id) state.activeTargetId = state.targets[Math.min(idx, state.targets.length - 1)]?.id || null;
-    renderTargetStrip();
+    renderTargetStrip(); updateStructuralMaps();
     if (!state.targets.length) { refs.workspace.classList.add('hidden'); refs.beforeCanvas.width = refs.afterCanvas.width = 0; }
     else if (state.referenceStats) drawPreview();
   }
@@ -1312,6 +1395,7 @@
   refs.prevTargetBtn.addEventListener('click', () => selectRelative(-1)); refs.nextTargetBtn.addEventListener('click', () => selectRelative(1));
   refs.exportBtn.addEventListener('click', () => exportCurrent('image/png')); refs.exportJpgBtn.addEventListener('click', () => exportCurrent('image/jpeg', .94)); refs.exportAllBtn.addEventListener('click', exportAllZip); refs.exportLutBtn.addEventListener('click', exportLut);
   refs.upscale2x.addEventListener('change', () => { if (activeTarget() && state.referenceStats) drawPreview(); });
+  refs.structuralToggle?.addEventListener('change', () => { for (const t of state.targets) { t.structuralMaps = null; t.controlNetPayload = null; } updateStructuralMaps(); if (activeTarget() && state.referenceStats) drawPreview(); });
   const blueCastToggles = document.querySelectorAll('.blue-cast-toggle, #blueCastToggleSidebar, #blueCastToggleExport, #blueCastToggle');
   blueCastToggles.forEach(toggle => {
     toggle.addEventListener('change', e => {

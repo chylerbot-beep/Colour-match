@@ -25,3 +25,4 @@
 .tone-chip strong{display:block;margin-top:4px;font-size:11px;font-variant-numeric:tabular-nums}
 .tone-chip.lift strong{color:#d8f077}.tone-chip.lower strong{color:#e0b39b}
 @media(max-width:620px){.tone-eq{grid-template-columns:repeat(5,minmax(52px,1fr));overflow-x:auto;padding-bottom:2px}.tone-chip span{font-size:7px}}
+.structural-preview{margin:12px 0 14px;padding:10px;border:1px solid #292923;border-radius:14px;background:#12120f}.structural-map-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.structural-map-grid figure{margin:0}.structural-map-grid canvas{display:block;width:100%;height:auto;max-height:190px;object-fit:contain;border-radius:10px;background:#090908;border:1px solid #272721}.structural-map-grid figcaption{margin-top:6px;color:#9b988c;font-size:10px;text-align:center}
