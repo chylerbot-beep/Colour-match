@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#11110f" />
+  <title>Colour Match v5 — Automatic Interior Photo Finisher</title>
+  <link rel="stylesheet" href="finish-match-v4.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div>
+        <h1>Colour Match <span>v5</span></h1>
+        <p class="subtitle">Instantly colour match interior photos to your reference look.</p>
+      </div>
+    </header>
+
+    <main>
+      <section class="upload-grid" aria-label="Image uploads">
+        <article class="upload-card paste-active" id="referenceDrop">
+          <div class="card-head">
+            <span class="step">01</span>
+            <div class="card-head-copy"><h2>References</h2><p>Use 1 image, or 3–5 from the same photographic style for a more robust profile</p></div>
+            <button class="paste-target-btn" id="pasteToReferencesBtn" type="button" aria-pressed="true">Paste here</button>
+          </div>
+          <label class="dropzone reference-dropzone" for="referenceInput">
+            <div class="target-stack" id="referenceStack" aria-hidden="true"></div>
+            <div class="drop-copy">
+              <span class="upload-icon">＋</span>
+              <strong>Choose reference photos</strong>
+              <span>choose, drop, or paste a screenshot</span>
+            </div>
+          </label>
+          <input type="file" id="referenceInput" accept="image/*" multiple hidden />
+          <div class="upload-footer hidden" id="referenceUploadFooter">
+            <span id="referenceCountLabel">0 references</span>
+            <div class="button-row tight"><button class="mini-btn" id="addReferencesBtn" type="button">Add more</button><button class="mini-btn" id="clearReferencesBtn" type="button">Clear</button></div>
+          </div>
+        </article>
+
+        <article class="upload-card" id="targetDrop">
+          <div class="card-head">
+            <span class="step">02</span>
+            <div class="card-head-copy"><h2>Targets</h2><p>Upload one or many renders / photos from the same project</p></div>
+            <button class="paste-target-btn" id="pasteToTargetsBtn" type="button" aria-pressed="false">Paste here</button>
+          </div>
+          <label class="dropzone target-dropzone" for="targetInput">
+            <div class="target-stack" id="targetStack" aria-hidden="true"></div>
+            <div class="drop-copy">
+              <span class="upload-icon">＋</span>
+              <strong>Choose target photos</strong>
+              <span>choose, drop, or paste a screenshot</span>
+            </div>
+          </label>
+          <input type="file" id="targetInput" accept="image/*" multiple hidden />
+          <div class="upload-footer hidden" id="targetUploadFooter">
+            <span id="targetCountLabel">0 targets</span>
+            <button class="mini-btn" id="addTargetsBtn" type="button">Add more</button>
+          </div>
+        </article>
+      </section>
+
+      <div class="paste-helper" id="pasteHelper" role="status" aria-live="polite">
+        <span class="paste-key">Ctrl / ⌘ + V</span>
+        <span>Screenshot will paste into <strong id="pasteDestinationLabel">References</strong></span>
+      </div>
+
+      <section class="workspace hidden" id="workspace">
+        <aside class="panel controls-panel">
+          <div class="panel-head">
+            <div>
+              <div class="eyebrow">REFERENCE PROFILE</div>
+              <h2>Automatic photographic finish</h2>
+            </div>
+            <button class="ghost-btn" id="resetBtn" type="button">Reset shared edits</button>
+          </div>
+
+          <div class="style-summary" id="styleSummary"></div>
+          <div class="analysis-grid" id="analysisGrid"></div>
+
+          <div class="sub-card">
+            <div class="mini-head"><span>Three-way colour bias</span><small>Shadows / mids / highlights</small></div>
+            <div class="three-way" id="referenceThreeWay"></div>
+          </div>
+
+          <div class="hist-card">
+            <div class="mini-head"><span>Reference histogram</span><small>Luminance + RGB</small></div>
+            <canvas id="referenceHistogram" class="histogram" width="360" height="120"></canvas>
+          </div>
+
+          <div class="sub-card">
+            <div class="mini-head"><span>Reference profile confidence</span><small id="referenceAgreementLabel">—</small></div>
+            <div class="tone-eq" id="referenceToneProfile"></div>
+            <p class="microcopy">With multiple references, v5 uses median photographic characteristics so room content has less influence on the saved look.</p>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="section-heading diagnosis-heading">
+            <div>
+              <span class="eyebrow">ACTIVE TARGET DIAGNOSIS</span>
+              <strong id="activeTargetLabel">—</strong>
+              <small id="compatibilityLabel">—</small>
+            </div>
+            <div class="button-row tight">
+              <button class="mini-btn" id="autoTuneBtn" type="button">Rematch</button>
+              <button class="mini-btn" id="autoTuneAllBtn" type="button">Rematch all</button>
+            </div>
+          </div>
+          <div class="diagnosis" id="targetDiagnosis"></div>
+
+          <div class="sub-card">
+            <div class="mini-head"><span>Target three-way colour</span><small>Pixel-based indicator</small></div>
+            <div class="three-way" id="targetThreeWay"></div>
+          </div>
+
+          <div class="sub-card">
+            <div class="mini-head"><span>Adaptive tone equalizer</span><small>Recommended by luminance zone</small></div>
+            <div class="tone-eq" id="targetToneEq"></div>
+          </div>
+
+          <div class="hist-card">
+            <div class="mini-head"><span>Target → result</span><small>Before / after luminance</small></div>
+            <canvas id="targetHistogram" class="histogram" width="360" height="120"></canvas>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="auto-finish-card">
+            <div class="mini-head"><span>Automatic finish</span><small id="finishPresetLabel">Natural • default</small></div>
+            <div class="finish-presets" role="group" aria-label="Automatic finish strength">
+              <button class="finish-preset active" data-preset="natural" type="button">Natural</button>
+              <button class="finish-preset" data-preset="editorial" type="button">Editorial</button>
+              <button class="finish-preset" data-preset="bold" type="button">Bold</button>
+            </div>
+            <p>Reference-derived curves, colour separation, highlight control and local depth are applied automatically to every target.</p>
+          </div>
+
+          <div class="section-heading"><div><span class="eyebrow">SHARED LOOK</span><strong>Adaptive transfer</strong></div></div>
+          <div class="control-group">
+            <label><span>Overall match</span><output id="matchStrengthOut">70</output></label>
+            <input type="range" id="matchStrength" min="0" max="100" value="70" />
+          </div>
+          <div class="control-group">
+            <label><span>Global tone match</span><output id="toneStrengthOut">65</output></label>
+            <input type="range" id="toneStrength" min="0" max="100" value="65" />
+          </div>
+          <div class="control-group">
+            <label><span>Colour match</span><output id="colorStrengthOut">55</output></label>
+            <input type="range" id="colorStrength" min="0" max="100" value="55" />
+          </div>
+          <div class="control-group compact">
+            <label><span>Three-way colour</span><output id="threeWayStrengthOut">45</output></label>
+            <input type="range" id="threeWayStrength" min="0" max="100" value="45" />
+          </div>
+          <div class="control-group compact">
+            <label><span>Adaptive tone equalizer</span><output id="adaptiveToneStrengthOut">60</output></label>
+            <input type="range" id="adaptiveToneStrength" min="0" max="100" value="60" />
+          </div>
+          <div class="control-group compact">
+            <label><span>Detail match</span><output id="detailStrengthOut">50</output></label>
+            <input type="range" id="detailStrength" min="0" max="100" value="50" />
+          </div>
+          <div class="control-group compact">
+            <label><span>Neutral protection</span><output id="neutralProtectOut">65</output></label>
+            <input type="range" id="neutralProtect" min="0" max="100" value="65" />
+          </div>
+          <div class="control-group compact">
+            <label><span>Clipping protection</span><output id="clipProtectOut">90</output></label>
+            <input type="range" id="clipProtect" min="0" max="100" value="90" />
+          </div>
+
+          <details open>
+            <summary>Automatic finishing</summary>
+            <div class="details-body">
+              <div class="control-group compact">
+                <label><span>Highlight roll-off</span><output id="highlightRolloffOut">72</output></label>
+                <input type="range" id="highlightRolloff" min="0" max="100" value="72" />
+              </div>
+              <div class="control-group compact">
+                <label><span>Colour density</span><output id="colourDensityOut">62</output></label>
+                <input type="range" id="colourDensity" min="0" max="100" value="62" />
+              </div>
+              <div class="control-group compact">
+                <label><span>Local depth</span><output id="localDepthOut">58</output></label>
+                <input type="range" id="localDepth" min="0" max="100" value="58" />
+              </div>
+              <div class="control-group compact">
+                <label><span>Interior protection</span><output id="interiorProtectOut">82</output></label>
+                <input type="range" id="interiorProtect" min="0" max="100" value="82" />
+              </div>
+              <div class="control-group compact">
+                <label><span>Finish texture</span><output id="finishTextureOut">45</output></label>
+                <input type="range" id="finishTexture" min="0" max="100" value="45" />
+              </div>
+            </div>
+          </details>
+
+          <details open>
+            <summary>Shared Lightroom-style controls</summary>
+            <div class="details-body">
+              <div class="control-group compact">
+                <label><span>Exposure</span><output id="exposureOut">0.00</output></label>
+                <input type="range" id="exposure" min="-100" max="100" value="0" />
+              </div>
+              <div class="control-group compact">
+                <label><span>Contrast</span><output id="contrastOut">0</output></label>
+                <input type="range" id="contrast" min="-50" max="50" value="0" />
+              </div>
+              <div class="control-group compact">
+                <label><span>Shadows</span><output id="shadowsOut">0</output></label>
+                <input type="range" id="shadows" min="-50" max="50" value="0" />
+              </div>
+              <div class="control-group compact">
+                <label><span>Highlights</span><output id="highlightsOut">0</output></label>
+                <input type="range" id="highlights" min="-50" max="50" value="0" />
+              </div>
+              <div class="control-group compact">
+                <label><span>Warmth</span><output id="warmthOut">0</output></label>
+                <input type="range" id="warmth" min="-50" max="50" value="0" />
+              </div>
+              <div class="control-group compact">
+                <label><span>Tint</span><output id="tintOut">0</output></label>
+                <input type="range" id="tint" min="-50" max="50" value="0" />
+              </div>
+              <div class="control-group compact">
+                <label><span>Saturation</span><output id="saturationOut">0</output></label>
+                <input type="range" id="saturation" min="-50" max="50" value="0" />
+              </div>
+              <div class="control-group compact">
+                <label><span>Grain</span><output id="grainOut">0</output></label>
+                <input type="range" id="grain" min="0" max="30" value="0" />
+              </div>
+            </div>
+          </details>
+
+          <details open>
+            <summary>Per-image correction</summary>
+            <div class="details-body">
+              <div class="control-group compact">
+                <label><span>Exposure trim</span><output id="trimExposureOut">0.00</output></label>
+                <input type="range" id="trimExposure" min="-60" max="60" value="0" />
+              </div>
+              <div class="control-group compact">
+                <label><span>Contrast trim</span><output id="trimContrastOut">0</output></label>
+                <input type="range" id="trimContrast" min="-30" max="30" value="0" />
+              </div>
+              <div class="control-group compact">
+                <label><span>Warmth trim</span><output id="trimWarmthOut">0</output></label>
+                <input type="range" id="trimWarmth" min="-30" max="30" value="0" />
+              </div>
+              <div class="control-group compact">
+                <label><span>Tint trim</span><output id="trimTintOut">0</output></label>
+                <input type="range" id="trimTint" min="-30" max="30" value="0" />
+              </div>
+            </div>
+            <div class="button-row compact-actions">
+              <button class="mini-btn" id="resetCurrentBtn" type="button">Reset current correction</button>
+            </div>
+          </details>
+
+          <details>
+            <summary>Tone & RGB curves</summary>
+            <div class="curve-tools">
+              <div class="segmented curve-tabs" role="group" aria-label="Curve channel">
+                <button class="curve-tab active" data-channel="master" type="button">Master</button>
+                <button class="curve-tab" data-channel="r" type="button">R</button>
+                <button class="curve-tab" data-channel="g" type="button">G</button>
+                <button class="curve-tab" data-channel="b" type="button">B</button>
+              </div>
+              <button class="mini-btn" id="resetCurveBtn" type="button">Reset curve</button>
+            </div>
+            <canvas id="curveCanvas" class="curve-canvas" width="380" height="250" aria-label="Editable tone curve"></canvas>
+            <p class="microcopy">Drag the three inner points. Curves are shared by every target.</p>
+          </details>
+
+          <details>
+            <summary>HSL colour mixer</summary>
+            <div class="hsl-header"><span>Colour</span><span>Hue</span><span>Sat</span><span>Lum</span></div>
+            <div id="hslMixer" class="hsl-mixer"></div>
+          </details>
+
+          <div class="button-row stack-mobile profile-actions">
+            <button class="secondary-btn" id="saveProfileBtn" type="button">Save profile</button>
+            <label class="secondary-btn file-btn" for="loadProfileInput">Load profile</label>
+            <input type="file" id="loadProfileInput" accept="application/json,.json" hidden />
+            <button class="secondary-btn" id="exportLutBtn" type="button">Export .CUBE</button>
+          </div>
+        </aside>
+
+        <section class="panel preview-panel">
+          <div class="panel-head preview-head">
+            <div>
+              <div class="eyebrow">BATCH TARGETS</div>
+              <h2 id="previewTitle">Before / after</h2>
+            </div>
+            <div class="button-row tight">
+              <button class="mini-btn" id="prevTargetBtn" type="button" aria-label="Previous target">← Prev</button>
+              <button class="mini-btn" id="nextTargetBtn" type="button" aria-label="Next target">Next →</button>
+            </div>
+          </div>
+
+          <div class="target-strip" id="targetStrip" aria-label="Target image queue"></div>
+
+          <div class="preview-toolbar">
+            <div class="segmented" role="group" aria-label="Preview mode">
+              <button class="seg active" data-mode="split" type="button">Split</button>
+              <button class="seg" data-mode="before" type="button">Before</button>
+              <button class="seg" data-mode="after" type="button">After</button>
+            </div>
+            <div class="batch-summary" id="batchSummary">—</div>
+          </div>
+
+          <div class="mobile-quick-actions" aria-label="Quick actions">
+            <button class="secondary-btn" id="mobileAutoTuneBtn" type="button">Rematch current</button>
+            <button class="primary-btn" id="mobileAutoTuneAllBtn" type="button">Rematch all targets</button>
+          </div>
+
+          <div class="compare" id="compareWrap">
+            <canvas id="beforeCanvas"></canvas>
+            <div class="after-layer" id="afterLayer">
+              <canvas id="afterCanvas"></canvas>
+            </div>
+            <div class="split-line" id="splitLine"><span></span></div>
+            <input class="split-slider" id="splitSlider" type="range" min="0" max="100" value="50" aria-label="Before after split" />
+            <div class="badge before-badge">BEFORE</div>
+            <div class="badge after-badge">AFTER</div>
+          </div>
+
+          <div class="result-note" id="resultNote">Load a reference and target images to begin.</div>
+
+          <div class="export-panel">
+            <div class="export-current">
+              <span class="eyebrow">CURRENT</span>
+              <label class="upscale-option" for="upscale2x">
+                <input id="upscale2x" type="checkbox" />
+                <span class="upscale-switch" aria-hidden="true"></span>
+                <span>AI Super-Resolution (Real-ESRGAN)</span>
+              </label>
+              <div class="button-row">
+                <button class="secondary-btn" id="newReferenceBtn" type="button">Add references</button>
+                <button class="secondary-btn" id="newTargetBtn" type="button">Add targets</button>
+                <button class="secondary-btn" id="exportJpgBtn" type="button">Export JPG</button>
+                <button class="primary-btn" id="exportBtn" type="button">Export PNG</button>
+              </div>
+            </div>
+            <div class="export-batch">
+              <span class="eyebrow">BATCH</span>
+              <div class="button-row batch-export-row">
+                <select id="batchFormat" class="select-input" aria-label="Batch export format">
+                  <option value="image/jpeg">JPG</option>
+                  <option value="image/png">PNG</option>
+                </select>
+                <button class="primary-btn" id="exportAllBtn" type="button">Export all as ZIP</button>
+              </div>
+            </div>
+          </div>
+          <div class="progress hidden" id="batchProgress"><div id="batchProgressBar"></div><span id="batchProgressText">Preparing…</span></div>
+        </section>
+      </section>
+
+    </main>
+
+    <footer>
+      <span>Colour Match v5 • automatic browser-only processing</span>
+      <span>No backend • no API key • no image upload</span>
+    </footer>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.webgpu.min.js"></script>
+  <script src="vendor/pica.min.js"></script>
+  <script src="ai-upscaler.js"></script>
+  <script src="finish-match-v4.js"></script>
+</body>
+</html>
