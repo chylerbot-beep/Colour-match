@@ -1142,6 +1142,53 @@ function optimizeParameters(renderFn, initialParams, targetStats, refStats, w, h
   };
 }
 
+/**
+ * Computes spatial depth gradient map from normalized float depth array
+ */
+function computeDepthGradients(rawDepth, w, h) {
+  if (!rawDepth) return null;
+  const gradients = new Float32Array(w * h);
+  for (let y = 1; y < h - 1; y++) {
+    const yw = y * w;
+    for (let x = 1; x < w - 1; x++) {
+      const idx = yw + x;
+      const dx = rawDepth[idx + 1] - rawDepth[idx - 1];
+      const dy = rawDepth[idx + w] - rawDepth[idx - w];
+      gradients[idx] = Math.hypot(dx, dy);
+    }
+  }
+  return gradients;
+}
+
+/**
+ * Depth-aware tonal grading: separates near vs far spatial planes,
+ * gentle aerial atmospheric haze control and foreground contrast enhancement.
+ */
+function applyDepthTonalGrading(r, g, b, depthVal, depthGrad, params) {
+  if (depthVal === undefined || depthVal === null) return [r, g, b];
+  const amount = (params.localDepth || 0.5) * (params.match || 0.7);
+  if (amount <= 0.02) return [r, g, b];
+
+  // depthVal: 0 = Far, 1 = Near
+  // 1. Gentle aerial perspective: far background receives mild tone equalization / softness
+  const farLayer = (1 - depthVal);
+  const nearLayer = depthVal;
+
+  // 2. Local Depth Pop: Foreground midtones get enhanced separation without crushing blacks
+  const pop = (nearLayer - 0.5) * amount * 18 * (1 - smoothstep(0.15, 0.45, depthGrad || 0));
+
+  // 3. Subtle depth separation in RGB
+  let rOut = r + pop;
+  let gOut = g + pop * 0.95;
+  let bOut = b + pop * 0.90;
+
+  return [
+    clamp(Math.round(rOut), 0, 255),
+    clamp(Math.round(gOut), 0, 255),
+    clamp(Math.round(bOut), 0, 255)
+  ];
+}
+
 const ColorEngine = {
   rgbToXyz,
   xyzToRgb,
@@ -1171,7 +1218,9 @@ const ColorEngine = {
   applyIlluminationCorrection,
   transferLocalMaterialColor,
   evaluateCompositeScore,
-  optimizeParameters
+  optimizeParameters,
+  computeDepthGradients,
+  applyDepthTonalGrading
 };
 
 if (typeof window !== 'undefined') {
@@ -1208,5 +1257,8 @@ export {
   applyIlluminationCorrection,
   transferLocalMaterialColor,
   evaluateCompositeScore,
-  optimizeParameters
+  optimizeParameters,
+  computeDepthGradients,
+  applyDepthTonalGrading
 };
+

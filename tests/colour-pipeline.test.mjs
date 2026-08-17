@@ -310,3 +310,29 @@ test("Objective composite evaluation and parameter optimization bounds", () => {
   assert.ok(opt.finalScore.overallScore >= opt.initialScore.overallScore, "Final score >= Initial score");
   assert.ok(opt.optimizedParams.localStrength >= 0.2 && opt.optimizedParams.localStrength <= 0.95, "Local strength bounded");
 });
+
+test("Depth Anything spatial gradient and depth-aware tonal modulation", async () => {
+  const w = 10;
+  const h = 10;
+  const rawDepth = new Float32Array(w * h);
+
+  // Gradient depth from 0.0 (far background) to 1.0 (near foreground)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      rawDepth[y * w + x] = y / (h - 1);
+    }
+  }
+
+  const gradients = ColorEngine.computeDepthGradients(rawDepth, w, h);
+  assert.ok(gradients instanceof Float32Array, "Gradients is Float32Array");
+  assert.equal(gradients.length, w * h, "Gradients matches image size");
+  assert.ok(gradients[5 * w + 5] > 0, "Non-zero gradient across depth ramp");
+
+  // Depth grading test on foreground vs background
+  const bg = ColorEngine.applyDepthTonalGrading(120, 120, 120, 0.1, gradients[w + 1], { localDepth: 0.7, match: 0.8 });
+  const fg = ColorEngine.applyDepthTonalGrading(120, 120, 120, 0.9, gradients[8 * w + 5], { localDepth: 0.7, match: 0.8 });
+
+  assert.ok(fg[0] > bg[0], "Foreground receives tonal pop relative to background");
+  assert.ok(fg[0] >= 0 && fg[0] <= 255, "Output clamped to 8-bit range");
+});
+
