@@ -1,7 +1,8 @@
-"""Structural image preprocessors for ControlNet conditioning maps.
+"""Depth Anything V2 image preprocessing.
 
-This module intentionally lazy-loads the Depth Anything v2 pipeline so importing it
-is cheap and the model is only resident when depth extraction is requested.
+This module intentionally lazy-loads the Depth Anything V2 pipeline from
+https://github.com/DepthAnything/Depth-Anything-V2 so importing it is cheap and
+the model is only resident when depth extraction is requested.
 """
 
 from __future__ import annotations
@@ -9,7 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-import cv2
 import numpy as np
 import torch
 from PIL import Image
@@ -18,7 +18,7 @@ from transformers import pipeline
 
 @dataclass
 class StructuralPreprocessor:
-    """Extract Canny line art and Depth Anything v2 maps for conditioning."""
+    """Extract Depth Anything V2 maps for downstream image conditioning."""
 
     depth_model: str = "depth-anything/Depth-Anything-V2-Small-hf"
     _depth_pipe: Any | None = field(default=None, init=False, repr=False)
@@ -34,26 +34,11 @@ class StructuralPreprocessor:
             if image.ndim == 3:
                 arr = image.astype(np.uint8)
                 if arr.shape[2] == 4:
-                    arr = cv2.cvtColor(arr, cv2.COLOR_BGRA2RGBA)
-                    return Image.fromarray(arr, mode="RGBA").convert("RGB")
-                # OpenCV arrays are usually BGR; convert to RGB for PIL.
-                arr = cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
-                return Image.fromarray(arr, mode="RGB")
+                    # OpenCV arrays are usually BGRA; reorder to RGBA for PIL.
+                    return Image.fromarray(arr[..., [2, 1, 0, 3]], mode="RGBA").convert("RGB")
+                # OpenCV arrays are usually BGR; reorder to RGB for PIL.
+                return Image.fromarray(arr[..., ::-1], mode="RGB")
         raise TypeError("image must be a PIL.Image.Image or numpy.ndarray")
-
-    def extract_canny(
-        self,
-        image: Image.Image | np.ndarray,
-        low_threshold: int = 100,
-        high_threshold: int = 200,
-    ) -> Image.Image:
-        """Return a single-channel Canny edge map as a PIL image."""
-        pil_image = self._to_pil_rgb(image)
-        rgb = np.asarray(pil_image)
-        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 1.2)
-        edges = cv2.Canny(blurred, low_threshold, high_threshold)
-        return Image.fromarray(edges, mode="L")
 
     def _load_depth_pipeline(self) -> Any:
         if self._depth_pipe is None:
@@ -69,7 +54,7 @@ class StructuralPreprocessor:
         return self._depth_pipe
 
     def extract_depth(self, image: Image.Image | np.ndarray) -> Image.Image:
-        """Return a normalized Depth Anything v2 depth map as an 8-bit PIL image."""
+        """Return a normalized Depth Anything V2 depth map as an 8-bit PIL image."""
         pil_image = self._to_pil_rgb(image)
         result = self._load_depth_pipeline()(pil_image)
         depth = result.get("depth") if isinstance(result, dict) else result
