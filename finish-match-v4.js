@@ -1347,10 +1347,43 @@
   function generateControlNetDepth(sourceCanvas) {
     const w = sourceCanvas.width, h = sourceCanvas.height, c = document.createElement('canvas'); c.width = w; c.height = h;
     const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(sourceCanvas, 0, 0);
-    const img = ctx.getImageData(0, 0, w, h), d = img.data;
-    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-      const i = (y * w + x) * 4, luma = .299 * d[i] + .587 * d[i + 1] + .114 * d[i + 2], vertical = 255 * (1 - y / Math.max(1, h - 1));
-      const v = clamp(luma * .55 + vertical * .45); d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+    const img = ctx.getImageData(0, 0, w, h), d = img.data, px = w * h;
+    const luma = new Float32Array(px), edge = new Float32Array(px), depth = new Float32Array(px), scratch = new Float32Array(px);
+    for (let i = 0, p = 0; i < d.length; i += 4, p++) luma[p] = .299 * d[i] + .587 * d[i + 1] + .114 * d[i + 2];
+
+    // Browser exports cannot run a monocular depth network, so make a structural
+    // conditioning map instead of a greyscale copy: near floor/foreground is light,
+    // distant walls/ceiling are dark, and image edges only protect object borders.
+    for (let y = 0; y < h; y++) {
+      const ny = h > 1 ? y / (h - 1) : 0, perspective = Math.pow(ny, 1.35);
+      for (let x = 0; x < w; x++) {
+        const nx = w > 1 ? x / (w - 1) : .5, p = y * w + x;
+        const side = Math.abs(nx - .5) * Math.max(0, ny - .18) * .22;
+        const floorLift = smoothstep(.48, 1, ny) * .2;
+        const ceilingPush = smoothstep(.34, 0, ny) * .3;
+        depth[p] = clamp01(.16 + perspective * .72 + floorLift + side - ceilingPush) * 255;
+      }
+    }
+
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+      const p = y * w + x;
+      const gx = -luma[p - w - 1] + luma[p - w + 1] - 2 * luma[p - 1] + 2 * luma[p + 1] - luma[p + w - 1] + luma[p + w + 1];
+      const gy = -luma[p - w - 1] - 2 * luma[p - w] - luma[p - w + 1] + luma[p + w - 1] + 2 * luma[p + w] + luma[p + w + 1];
+      edge[p] = clamp01(Math.hypot(gx, gy) / 210);
+    }
+
+    for (let pass = 0; pass < 4; pass++) {
+      scratch.set(depth);
+      for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+        const p = y * w + x, keep = edge[p] * .65;
+        const avg = (scratch[p] * 4 + scratch[p - 1] * 2 + scratch[p + 1] * 2 + scratch[p - w] * 2 + scratch[p + w] * 2 + scratch[p - w - 1] + scratch[p - w + 1] + scratch[p + w - 1] + scratch[p + w + 1]) / 16;
+        depth[p] = scratch[p] * keep + avg * (1 - keep);
+      }
+    }
+
+    for (let p = 0, i = 0; p < px; p++, i += 4) {
+      const v = clamp(depth[p] + edge[p] * 18);
+      d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
     }
     ctx.putImageData(img, 0, 0); return c;
   }
