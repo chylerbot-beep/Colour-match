@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import ColorEngine from "../color-engine.js";
+import ColorEngine from "../color-engine.module.js";
 
 test("RGB <-> XYZ <-> Lab <-> RGB round-trip precision", () => {
   const testColors = [
