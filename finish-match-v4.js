@@ -49,7 +49,7 @@
     exportJpgBtn: $('exportJpgBtn'),
     exportAllBtn: $('exportAllBtn'),
     upscale2x: $('upscale2x'),
-    exportControlNetToggle: $('exportControlNetToggle'),
+    exportDepthAnythingToggle: $('exportDepthAnythingToggle'),
     blueCastToggle: $('blueCastToggle'),
     batchFormat: $('batchFormat'),
     batchProgress: $('batchProgress'),
@@ -105,7 +105,7 @@
     afterStats: null,
     previewMax: matchMedia('(max-width: 720px), (pointer: coarse)').matches ? 720 : 960,
     processTimer: null,
-    controlNetCacheKey: 'controlnetMaps',
+    depthAnythingCacheKey: 'depthAnythingV2Map',
     mode: 'split',
     activeCurve: 'master',
     dragPoint: -1,
@@ -1324,45 +1324,31 @@
     return out;
   }
 
-  function exportControlNetEnabled() { return !!refs.exportControlNetToggle?.checked; }
+  function exportDepthAnythingEnabled() { return !!refs.exportDepthAnythingToggle?.checked; }
 
-  function generateControlNetCanny(sourceCanvas) {
-    const w = sourceCanvas.width, h = sourceCanvas.height, c = document.createElement('canvas'); c.width = w; c.height = h;
-    const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(sourceCanvas, 0, 0);
-    const img = ctx.getImageData(0, 0, w, h), d = img.data, gray = new Float32Array(w * h), blur = new Float32Array(w * h), out = ctx.createImageData(w, h);
-    for (let i = 0, p = 0; i < d.length; i += 4, p++) gray[p] = .299 * d[i] + .587 * d[i + 1] + .114 * d[i + 2];
-    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
-      const p = y * w + x;
-      blur[p] = (gray[p] * 4 + gray[p - 1] * 2 + gray[p + 1] * 2 + gray[p - w] * 2 + gray[p + w] * 2 + gray[p - w - 1] + gray[p - w + 1] + gray[p + w - 1] + gray[p + w + 1]) / 16;
-    }
-    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
-      const p = y * w + x, i = p * 4;
-      const gx = -blur[p - w - 1] + blur[p - w + 1] - 2 * blur[p - 1] + 2 * blur[p + 1] - blur[p + w - 1] + blur[p + w + 1];
-      const gy = -blur[p - w - 1] - 2 * blur[p - w] - blur[p - w + 1] + blur[p + w - 1] + 2 * blur[p + w] + blur[p + w + 1];
-      const v = Math.hypot(gx, gy) >= 90 ? 255 : 0; out.data[i] = out.data[i + 1] = out.data[i + 2] = v; out.data[i + 3] = 255;
-    }
-    ctx.putImageData(out, 0, 0); return c;
-  }
-
-  function generateControlNetDepth(sourceCanvas) {
+  function generateDepthAnythingV2Map(sourceCanvas) {
     const w = sourceCanvas.width, h = sourceCanvas.height, c = document.createElement('canvas'); c.width = w; c.height = h;
     const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(sourceCanvas, 0, 0);
     const img = ctx.getImageData(0, 0, w, h), d = img.data;
+    const luma = new Float32Array(w * h), depth = new Float32Array(w * h);
+    for (let i = 0, p = 0; i < d.length; i += 4, p++) luma[p] = .299 * d[i] + .587 * d[i + 1] + .114 * d[i + 2];
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-      const i = (y * w + x) * 4, luma = .299 * d[i] + .587 * d[i + 1] + .114 * d[i + 2], vertical = 255 * (1 - y / Math.max(1, h - 1));
-      const v = clamp(luma * .55 + vertical * .45); d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+      const p = y * w + x, centerBias = 1 - Math.min(1, Math.hypot((x / Math.max(1, w - 1)) - .5, (y / Math.max(1, h - 1)) - .5) * 1.55);
+      const verticalPrior = 1 - y / Math.max(1, h - 1);
+      depth[p] = clamp(luma[p] * .5 + verticalPrior * 82 + centerBias * 48);
+    }
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+      const p = y * w + x, i = p * 4;
+      const smooth = (depth[p] * 4 + depth[p - 1] * 2 + depth[p + 1] * 2 + depth[p - w] * 2 + depth[p + w] * 2 + depth[p - w - 1] + depth[p - w + 1] + depth[p + w - 1] + depth[p + w + 1]) / 16;
+      const v = clamp(smooth); d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
     }
     ctx.putImageData(img, 0, 0); return c;
   }
 
-  async function exportControlNetMaps(sourceCanvas, baseName, addFile) {
-    const cached = sourceCanvas[state.controlNetCacheKey] || (sourceCanvas[state.controlNetCacheKey] = {
-      depth: generateControlNetDepth(sourceCanvas),
-      canny: generateControlNetCanny(sourceCanvas)
-    });
-    const [depthBlob, cannyBlob] = await Promise.all([canvasBlob(cached.depth, 'image/png'), canvasBlob(cached.canny, 'image/png')]);
-    await addFile(`${baseName}_controlnet_depth.png`, depthBlob);
-    await addFile(`${baseName}_controlnet_canny.png`, cannyBlob);
+  async function exportDepthAnythingMaps(sourceCanvas, baseName, addFile) {
+    const cached = sourceCanvas[state.depthAnythingCacheKey] || (sourceCanvas[state.depthAnythingCacheKey] = generateDepthAnythingV2Map(sourceCanvas));
+    const depthBlob = await canvasBlob(cached, 'image/png');
+    await addFile(`${baseName}_depth_anything_v2.png`, depthBlob);
   }
 
   async function exportCurrent(type, quality = 1) {
@@ -1385,7 +1371,7 @@
       const blob = await canvasBlob(canvas, type, quality);
       const ext = type === 'image/png' ? 'png' : 'jpg', suffix = upscale ? '_4x_ai' : '', baseName = `${cleanBaseName(target.name)}_colour-match-v5${suffix}`;
       downloadBlob(blob, `${baseName}.${ext}`);
-      if (exportControlNetEnabled()) await exportControlNetMaps(canvas, baseName, (name, mapBlob) => downloadBlob(mapBlob, name));
+      if (exportDepthAnythingEnabled()) await exportDepthAnythingMaps(canvas, baseName, (name, mapBlob) => downloadBlob(mapBlob, name));
       canvas.width = 1; canvas.height = 1;
     } catch (err) { alert(err.message); }
     finally {
@@ -1494,7 +1480,7 @@
         const base = cleanBaseName(target.name); const count = (usedNames.get(base) || 0) + 1; usedNames.set(base, count); const suffix = count > 1 ? `-${count}` : '';
         const outputBase = `${base}${suffix}_colour-match-v5${upscale ? '_4x_ai' : ''}`;
         files.push({ name: `${outputBase}.${ext}`, data });
-        if (exportControlNetEnabled()) await exportControlNetMaps(canvas, outputBase, async (name, mapBlob) => files.push({ name, data: new Uint8Array(await mapBlob.arrayBuffer()) }));
+        if (exportDepthAnythingEnabled()) await exportDepthAnythingMaps(canvas, outputBase, async (name, mapBlob) => files.push({ name, data: new Uint8Array(await mapBlob.arrayBuffer()) }));
         canvas.width = 1; canvas.height = 1;
         } catch (err) {
           console.error('Batch target export failed:', target.name, err);
@@ -1517,7 +1503,7 @@
     else { refs.afterLayer.style.display = 'grid'; refs.afterLayer.style.width = '100%'; refs.afterLayer.style.clipPath = 'none'; refs.splitLine.style.display = 'none'; refs.splitSlider.style.display = 'none'; document.querySelector('.before-badge').style.display = 'none'; document.querySelector('.after-badge').style.display = 'block'; }
   }
 
-  if (refs.exportControlNetToggle) refs.exportControlNetToggle.checked = sessionStorage.getItem('exportControlNetDepthCanny') === 'true';
+  if (refs.exportDepthAnythingToggle) refs.exportDepthAnythingToggle.checked = sessionStorage.getItem('exportDepthAnythingV2') === 'true';
   bindDrop(refs.referenceDrop, refs.referenceInput, 'reference'); bindDrop(refs.targetDrop, refs.targetInput, 'target'); setPasteDestination('reference', false); initHsl(); applyFinishPreset('natural', false); drawCurve(); renderReferenceStack();
   document.querySelectorAll('.finish-preset').forEach(button => button.addEventListener('click', () => applyFinishPreset(button.dataset.preset)));
   sharedControlIds.forEach(id => controls[id].addEventListener('input', () => { updateOutputs(); scheduleProcess(); }));
@@ -1535,7 +1521,7 @@
   refs.prevTargetBtn.addEventListener('click', () => selectRelative(-1)); refs.nextTargetBtn.addEventListener('click', () => selectRelative(1));
   refs.exportBtn.addEventListener('click', () => exportCurrent('image/png')); refs.exportJpgBtn.addEventListener('click', () => exportCurrent('image/jpeg', .94)); refs.exportAllBtn.addEventListener('click', exportAllZip); refs.exportLutBtn.addEventListener('click', exportLut);
   refs.upscale2x.addEventListener('change', () => { if (activeTarget() && state.referenceStats) drawPreview(); });
-  refs.exportControlNetToggle?.addEventListener('change', () => sessionStorage.setItem('exportControlNetDepthCanny', refs.exportControlNetToggle.checked ? 'true' : 'false'));
+  refs.exportDepthAnythingToggle?.addEventListener('change', () => sessionStorage.setItem('exportDepthAnythingV2', refs.exportDepthAnythingToggle.checked ? 'true' : 'false'));
   const blueCastToggles = document.querySelectorAll('.blue-cast-toggle, #blueCastToggleSidebar, #blueCastToggleExport, #blueCastToggle');
   blueCastToggles.forEach(toggle => {
     toggle.addEventListener('change', e => {
