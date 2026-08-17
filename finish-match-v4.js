@@ -49,11 +49,6 @@
     exportJpgBtn: $('exportJpgBtn'),
     exportAllBtn: $('exportAllBtn'),
     upscale2x: $('upscale2x'),
-    structuralToggle: $('structuralToggle'),
-    structuralPreview: $('structuralPreview'),
-    structuralStatus: $('structuralStatus'),
-    cannyCanvas: $('cannyCanvas'),
-    depthCanvas: $('depthCanvas'),
     blueCastToggle: $('blueCastToggle'),
     batchFormat: $('batchFormat'),
     batchProgress: $('batchProgress'),
@@ -73,11 +68,21 @@
     nextTargetBtn: $('nextTargetBtn'),
     saveProfileBtn: $('saveProfileBtn'),
     loadProfileInput: $('loadProfileInput'),
-    finishPresetLabel: $('finishPresetLabel')
+    finishPresetLabel: $('finishPresetLabel'),
+    localStrength: $('localStrength'),
+    illuminationStrength: $('illuminationStrength'),
+    edgeSafetyStrength: $('edgeSafetyStrength'),
+    targetMaterialChips: $('targetMaterialChips'),
+    objectiveScoreSummary: $('objectiveScoreSummary'),
+    scoreOverall: $('scoreOverall'),
+    scoreColor: $('scoreColor'),
+    scoreStructure: $('scoreStructure'),
+    scoreEdge: $('scoreEdge'),
+    optimizeMatchBtn: $('optimizeMatchBtn')
   };
 
   const sharedControlIds = [
-    'matchStrength', 'toneStrength', 'colorStrength', 'threeWayStrength',
+    'matchStrength', 'toneStrength', 'colorStrength', 'localStrength', 'illuminationStrength', 'edgeSafetyStrength', 'threeWayStrength',
     'adaptiveToneStrength', 'detailStrength', 'neutralProtect', 'clipProtect',
     'highlightRolloff', 'colourDensity', 'localDepth', 'interiorProtect', 'finishTexture', 'exposure',
     'contrast', 'shadows', 'highlights', 'warmth', 'tint', 'saturation', 'grain'
@@ -99,7 +104,6 @@
     afterStats: null,
     previewMax: matchMedia('(max-width: 720px), (pointer: coarse)').matches ? 720 : 960,
     processTimer: null,
-    structuralTimer: null,
     mode: 'split',
     activeCurve: 'master',
     dragPoint: -1,
@@ -114,23 +118,27 @@
   const FINISH_PRESETS = {
     natural: {
       label: 'Natural • default', matchStrength: 60, toneStrength: 58, colorStrength: 46,
+      localStrength: 62, illuminationStrength: 52, edgeSafetyStrength: 85,
       threeWayStrength: 36, adaptiveToneStrength: 52, detailStrength: 30,
       neutralProtect: 78, clipProtect: 95, highlightRolloff: 56,
       colourDensity: 36, localDepth: 22, interiorProtect: 86, finishTexture: 14
     },
     editorial: {
       label: 'Editorial • recommended', matchStrength: 76, toneStrength: 70, colorStrength: 62,
+      localStrength: 76, illuminationStrength: 64, edgeSafetyStrength: 80,
       threeWayStrength: 54, adaptiveToneStrength: 68, detailStrength: 52,
       neutralProtect: 72, clipProtect: 94, highlightRolloff: 72,
       colourDensity: 62, localDepth: 58, interiorProtect: 82, finishTexture: 45
     },
     bold: {
       label: 'Bold • stronger pop', matchStrength: 88, toneStrength: 78, colorStrength: 70,
+      localStrength: 88, illuminationStrength: 72, edgeSafetyStrength: 75,
       threeWayStrength: 62, adaptiveToneStrength: 74, detailStrength: 60,
       neutralProtect: 70, clipProtect: 92, highlightRolloff: 82,
       colourDensity: 78, localDepth: 76, interiorProtect: 80, finishTexture: 58
     }
   };
+
 
   function clamp(v, min = 0, max = 255) { return Math.min(max, Math.max(min, v)); }
   function clamp01(v) { return clamp(v, 0, 1); }
@@ -232,6 +240,8 @@
     ]));
     agg.rgbPoints = Object.fromEntries(['r','g','b'].map(channel => [channel, Array.from({length:7}, (_, i) => medianField(items, ['rgbPoints', channel, i], [0.02,0.10,0.25,0.50,0.75,0.90,0.98][i]))]));
     agg.lightGrid = Array.from({length:9},(_,i) => Object.fromEntries(['y','u','v'].map(k => [k, medianField(items,['lightGrid',i,k], k === 'y' ? agg.meanY : 0)])));
+    const engine = (typeof ColorEngine !== 'undefined' ? ColorEngine : (typeof window !== 'undefined' ? window.ColorEngine : null));
+    agg.materialProfiles = engine ? engine.aggregateMaterialProfiles(items) : null;
     agg.hist = normalizedAggregateHist(items); agg.samples = items.reduce((sum,st) => sum + (st.samples || 0),0); agg.referenceCount = items.length; agg.referenceAgreement = referenceAgreement(items);
     return hydrateStats(agg);
   }
@@ -332,6 +342,14 @@
     const corners = [lightGrid[0].y, lightGrid[2].y, lightGrid[6].y, lightGrid[8].y];
     const center = lightGrid[4].y;
 
+    const engine = (typeof ColorEngine !== 'undefined' ? ColorEngine : (typeof window !== 'undefined' ? window.ColorEngine : null));
+    const matResult = engine ? engine.extractMaterialProfiles(imageData, w, h) : null;
+    const materialProfiles = matResult?.profiles || {};
+    const edges = matResult?.edges || null;
+    const edgeSafety = matResult?.edgeSafety || null;
+    const featherRadius = matResult?.featherRadius || 8;
+    const illuminationField = engine ? engine.estimateIlluminationField(imageData, w, h, lightGrid) : null;
+
     return {
       p01: percentile(ys, .01), p02: percentile(ys, .02), p05: percentile(ys, .05), p10: percentile(ys, .10),
       p25: percentile(ys, .25), p50: percentile(ys, .5), p75: percentile(ys, .75), p90: percentile(ys, .9),
@@ -347,7 +365,8 @@
       dynamicRange: percentile(ys, .98) - percentile(ys, .02),
       highlightShoulder: percentile(ys, .99) - percentile(ys, .95),
       shadowToe: percentile(ys, .05) - percentile(ys, .01),
-      hist, samples: ys.length
+      hist, samples: ys.length,
+      materialProfiles, edges, edgeSafety, featherRadius, illuminationField
     };
   }
 
@@ -360,6 +379,9 @@
     if (!s.hueBands) s.hueBands = HSL_BANDS.map(([, center]) => ({ hue: center, sat: s.meanSat || .2, lum: s.meanY || .5, share: 0 }));
     if (!s.rgbPoints) s.rgbPoints = Object.fromEntries(['r','g','b'].map(channel => [channel, [s.p02,s.p10,s.p25,s.p50,s.p75,s.p90,s.p98].map((v,i) => Number.isFinite(v) ? v : [0.02,0.10,0.25,0.50,0.75,0.90,0.98][i])]));
     if (!s.lightGrid) s.lightGrid = Array.from({ length: 9 }, () => ({ y: s.meanY || .5, u: s.uv.u, v: s.uv.v }));
+    if (!s.materialProfiles) s.materialProfiles = {};
+    if (!s.illuminationField) s.illuminationField = null;
+
     if (!Number.isFinite(s.dynamicRange)) s.dynamicRange = (s.p98 || .95) - (s.p02 || .05);
     if (!Number.isFinite(s.highlightShoulder)) s.highlightShoulder = (s.p99 || 1) - (s.p95 || .95);
     if (!Number.isFinite(s.shadowToe)) s.shadowToe = (s.p05 || .05) - (s.p01 || 0);
@@ -471,6 +493,39 @@
     refs.targetDiagnosis.innerHTML = rows.map(([k, v]) => `<div class="diagnostic"><span>${k}</span><strong>${v}</strong></div>`).join('');
     renderThreeWay(refs.targetThreeWay, t);
     renderTargetToneEq(target);
+
+    // V6 Semantic Material ROI Chips
+    if (refs.targetMaterialChips && t.materialProfiles) {
+      const matEntries = Object.entries(t.materialProfiles).filter(([_, p]) => p.present && p.confidence > 0.08);
+      if (matEntries.length) {
+        refs.targetMaterialChips.innerHTML = matEntries.map(([k, p]) => {
+          const confClass = p.confidence > 0.65 ? 'high-conf' : p.confidence > 0.35 ? 'mid-conf' : 'low-conf';
+          return `<div class="material-chip ${confClass}"><span class="mat-dot"></span><span>${p.label}</span><small>${Math.round(p.confidence * 100)}%</small></div>`;
+        }).join('');
+      } else {
+        refs.targetMaterialChips.innerHTML = '<small style="color:#77756c">No distinct material clusters detected</small>';
+      }
+    }
+
+    // V6 Objective ΔE00 / SSIM Score Card
+    const metrics = target.optimizationMetrics;
+    if (metrics && refs.scoreOverall) {
+      refs.scoreOverall.textContent = `${metrics.overallScore}`;
+      refs.scoreColor.textContent = `${metrics.colorScore}%`;
+      refs.scoreStructure.textContent = `${metrics.structureScore}%`;
+      refs.scoreEdge.textContent = `${metrics.edgeScore}%`;
+      if (refs.objectiveScoreSummary) {
+        refs.objectiveScoreSummary.textContent = `Avg ΔE: ${metrics.avgDeltaE} • Evaluated`;
+      }
+    } else if (refs.scoreOverall) {
+      refs.scoreOverall.textContent = '—';
+      refs.scoreColor.textContent = '—';
+      refs.scoreStructure.textContent = '—';
+      refs.scoreEdge.textContent = '—';
+      if (refs.objectiveScoreSummary) {
+        refs.objectiveScoreSummary.textContent = 'Click to evaluate & optimize';
+      }
+    }
   }
 
   function drawHistogramUnavailable(canvas, text) {
@@ -527,6 +582,9 @@
       match: +controls.matchStrength.value / 100,
       tone: +controls.toneStrength.value / 100,
       color: +controls.colorStrength.value / 100,
+      localStrength: +controls.localStrength.value / 100,
+      illuminationStrength: +controls.illuminationStrength.value / 100,
+      edgeSafetyStrength: +controls.edgeSafetyStrength.value / 100,
       threeWay: +controls.threeWayStrength.value / 100,
       adaptiveTone: +controls.adaptiveToneStrength.value / 100,
       detail: +controls.detailStrength.value / 100,
@@ -550,7 +608,8 @@
 
   function updateOutputs() {
     const formatters = {
-      matchStrength: v => v, toneStrength: v => v, colorStrength: v => v, threeWayStrength: v => v, adaptiveToneStrength: v => v, detailStrength: v => v,
+      matchStrength: v => v, toneStrength: v => v, colorStrength: v => v, localStrength: v => v, illuminationStrength: v => v, edgeSafetyStrength: v => v,
+      threeWayStrength: v => v, adaptiveToneStrength: v => v, detailStrength: v => v,
       neutralProtect: v => v, clipProtect: v => v, highlightRolloff: v => v, colourDensity: v => v,
       localDepth: v => v, interiorProtect: v => v, finishTexture: v => v, exposure: v => (+v / 100).toFixed(2), contrast: v => v,
       shadows: v => v, highlights: v => v, warmth: v => v, tint: v => v, saturation: v => v, grain: v => v,
@@ -841,90 +900,60 @@
     return toggle ? toggle.checked : false;
   }
 
-
-  function structuralMapsPayload(target = activeTarget()) {
-    if (!refs.structuralToggle?.checked || !target?.structuralMaps) return null;
-    return {
-      controlnet: {
-        canny: target.structuralMaps.cannyDataUrl,
-        depth: target.structuralMaps.depthDataUrl,
-        model: 'depth-anything/Depth-Anything-V2-Small-hf',
-        enabled: true
-      }
-    };
-  }
-
-  function drawImageToCanvas(canvas, img, maxSize = 512) {
-    const scale = Math.min(1, maxSize / Math.max(img.naturalWidth, img.naturalHeight));
-    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
-    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    return ctx;
-  }
-
-  function extractCannyBrowser(img) {
-    const canvas = document.createElement('canvas'), ctx = drawImageToCanvas(canvas, img);
-    if (window.cv?.Canny) {
-      const src = cv.imread(canvas), gray = new cv.Mat(), blurred = new cv.Mat(), edges = new cv.Mat();
-      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY); cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 1.2, 1.2, cv.BORDER_DEFAULT); cv.Canny(blurred, edges, 100, 200); cv.imshow(canvas, edges);
-      src.delete(); gray.delete(); blurred.delete(); edges.delete();
-      return canvas;
-    }
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height), d = imageData.data, out = ctx.createImageData(canvas.width, canvas.height);
-    for (let y = 1; y < canvas.height - 1; y++) for (let x = 1; x < canvas.width - 1; x++) {
-      const i = (y * canvas.width + x) * 4, lum = j => .299 * d[j] + .587 * d[j + 1] + .114 * d[j + 2];
-      const gx = -lum(i - canvas.width * 4 - 4) + lum(i - canvas.width * 4 + 4) - 2 * lum(i - 4) + 2 * lum(i + 4) - lum(i + canvas.width * 4 - 4) + lum(i + canvas.width * 4 + 4);
-      const gy = -lum(i - canvas.width * 4 - 4) - 2 * lum(i - canvas.width * 4) - lum(i - canvas.width * 4 + 4) + lum(i + canvas.width * 4 - 4) + 2 * lum(i + canvas.width * 4) + lum(i + canvas.width * 4 + 4);
-      const v = Math.hypot(gx, gy) > 100 ? 255 : 0; out.data[i] = out.data[i + 1] = out.data[i + 2] = v; out.data[i + 3] = 255;
-    }
-    ctx.putImageData(out, 0, 0); return canvas;
-  }
-
-  function extractDepthPreviewBrowser(img) {
-    const canvas = document.createElement('canvas'), ctx = drawImageToCanvas(canvas, img);
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height), d = imageData.data;
-    for (let y = 0; y < canvas.height; y++) for (let x = 0; x < canvas.width; x++) {
-      const i = (y * canvas.width + x) * 4, luma = .299 * d[i] + .587 * d[i + 1] + .114 * d[i + 2], vertical = 255 * (1 - y / Math.max(1, canvas.height - 1));
-      const v = clamp(luma * .55 + vertical * .45); d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
-    }
-    ctx.putImageData(imageData, 0, 0); return canvas;
-  }
-
-  function copyCanvas(src, dest) {
-    dest.width = src.width; dest.height = src.height; dest.getContext('2d').drawImage(src, 0, 0);
-  }
-
-  function updateStructuralMaps() {
-    const target = activeTarget();
-    if (!refs.structuralToggle?.checked) { refs.structuralPreview?.classList.add('hidden'); return; }
-    refs.structuralPreview?.classList.remove('hidden');
-    if (!target) { refs.structuralStatus.textContent = 'Load a target to generate maps'; return; }
-    refs.structuralStatus.textContent = 'Generating…';
-    clearTimeout(state.structuralTimer);
-    state.structuralTimer = setTimeout(() => {
-      try {
-        const canny = extractCannyBrowser(target.img), depth = extractDepthPreviewBrowser(target.img);
-        copyCanvas(canny, refs.cannyCanvas); copyCanvas(depth, refs.depthCanvas);
-        target.structuralMaps = { cannyDataUrl: canny.toDataURL('image/png'), depthDataUrl: depth.toDataURL('image/png') };
-        target.controlNetPayload = structuralMapsPayload(target);
-        refs.structuralStatus.textContent = 'Generated and attached to pipeline payload';
-      } catch (err) {
-        console.warn('Structural map extraction failed:', err);
-        refs.structuralStatus.textContent = 'Map extraction failed; using standard pipeline';
-        target.structuralMaps = null; target.controlNetPayload = null;
-      }
-    }, 20);
-  }
-
   function processPixels(imageData, w, h, srcStats, refStats, params) {
-    const d = imageData.data, luts = { master: curveLUT(state.curves.master), r: curveLUT(state.curves.r), g: curveLUT(state.curves.g), b: curveLUT(state.curves.b) };
-    let seed = 1337; const rand = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 - .5; };
+    const engine = (typeof ColorEngine !== 'undefined' ? ColorEngine : (typeof window !== 'undefined' ? window.ColorEngine : null));
+    const d = imageData.data;
+    const luts = {
+      master: curveLUT(state.curves.master),
+      r: curveLUT(state.curves.r),
+      g: curveLUT(state.curves.g),
+      b: curveLUT(state.curves.b)
+    };
+    let seed = 1337;
+    const rand = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 - .5; };
+
+    const edgeSafety = srcStats?.edgeSafety || (engine ? engine.computeEdgeSafetyMap(engine.computeEdgeMap(imageData, w, h), w, h) : null);
+    const illumField = srcStats?.illuminationField || null;
+
     for (let y = 0; y < h; y++) {
       const ny = h > 1 ? y / (h - 1) : .5;
+      const yw = y * w;
       for (let x = 0; x < w; x++) {
-        const i = (y * w + x) * 4; if (d[i + 3] < 20) continue; const [r, g, b] = transformRGB(d[i], d[i + 1], d[i + 2], srcStats, refStats, params, luts, params.grain ? rand() : 0, w > 1 ? x / (w - 1) : .5, ny);
-        d[i] = r; d[i + 1] = g; d[i + 2] = b;
+        const i = (yw + x) * 4;
+        if (d[i + 3] < 20) continue;
+        const nx = w > 1 ? x / (w - 1) : .5;
+        const origR = d[i], origG = d[i + 1], origB = d[i + 2];
+
+        // 1. Global Transform
+        let [r, g, b] = transformRGB(origR, origG, origB, srcStats, refStats, params, luts, params.grain ? rand() : 0, nx, ny);
+
+        // 2. Spatial Illumination Cast Correction
+        if (engine && illumField && params.illuminationStrength > 0.04) {
+          const illum = engine.interpolateIllumination(illumField, nx, ny);
+          [r, g, b] = engine.applyIlluminationCorrection(r, g, b, illum, {
+            illumination: params.illuminationStrength * params.match
+          });
+        }
+
+        // 3. Material-Aware LAB / LCh Local Colour Transfer
+        if (engine && refStats?.materialProfiles && srcStats?.materialProfiles && params.localStrength > 0.04) {
+          const edgeSafe = edgeSafety ? edgeSafety[yw + x] * (params.edgeSafetyStrength || 0.85) : 1;
+          [r, g, b] = engine.transferLocalMaterialColor(
+            r, g, b, nx, ny,
+            srcStats.materialProfiles,
+            refStats.materialProfiles,
+            edgeSafe,
+            {
+              localStrength: params.localStrength,
+              match: params.match,
+              neutralProtect: params.neutralProtect
+            }
+          );
+        }
+
+        d[i] = r;
+        d[i + 1] = g;
+        d[i + 2] = b;
       }
     }
     applyDetailMatch(imageData, w, h, srcStats, refStats, params);
@@ -937,7 +966,7 @@
 
   function drawPreview() {
     const target = activeTarget(); if (!target || !state.referenceStats) return;
-    renderTargetDiagnosis(target); syncTrimControls(); updateStructuralMaps();
+    renderTargetDiagnosis(target); syncTrimControls();
     const max = state.previewMax, scale = Math.min(1, max / Math.max(target.img.naturalWidth, target.img.naturalHeight));
     const w = Math.round(target.img.naturalWidth * scale), h = Math.round(target.img.naturalHeight * scale);
     [refs.beforeCanvas, refs.afterCanvas].forEach(c => { c.width = w; c.height = h; });
@@ -947,8 +976,7 @@
     state.afterStats = analyzeImageData(data, w, h); drawHistogram(refs.targetHistogram, target.stats.hist, 'y', state.afterStats.hist);
     refs.compareWrap.classList.remove('updating');
     const exportMode = refs.upscale2x.checked ? 'AI Super-Resolution on export' : 'export keeps original resolution';
-    const controlNetNote = structuralMapsPayload(target) ? ' • ControlNet Canny + Depth maps attached' : '';
-    refs.resultNote.textContent = `Automatic ${capitalize(state.finishPreset)} finish • Edge-aware luminosity${controlNetNote} • Target ${state.targets.indexOf(target) + 1} of ${state.targets.length} • AFTER is on the right • ${exportMode}`;
+    refs.resultNote.textContent = `Automatic ${capitalize(state.finishPreset)} finish • Edge-aware luminosity • Target ${state.targets.indexOf(target) + 1} of ${state.targets.length} • AFTER is on the right • ${exportMode}`;
     updateBatchSummary(); syncCompareSize(); drawCurve();
   }
 
@@ -995,6 +1023,59 @@
       tint: Math.round(clamp(tintDelta * 170, -10, 10))
     };
     target.tuned = true;
+  }
+
+  function optimizeTarget(target) {
+    if (!target || !state.referenceStats) return;
+    const engine = (typeof ColorEngine !== 'undefined' ? ColorEngine : (typeof window !== 'undefined' ? window.ColorEngine : null));
+    if (!engine) return;
+
+    // Fast thumbnail render for coordinate search
+    const tw = 240, th = Math.max(2, Math.round(target.img.naturalHeight * (240 / target.img.naturalWidth)));
+    const origC = document.createElement('canvas'); origC.width = tw; origC.height = th;
+    const origCtx = origC.getContext('2d', { willReadFrequently: true });
+    origCtx.drawImage(target.img, 0, 0, tw, th);
+    const origData = origCtx.getImageData(0, 0, tw, th);
+
+    const renderThumbnail = (candidateParams, rw, rh) => {
+      const c = document.createElement('canvas'); c.width = rw; c.height = rh;
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(target.img, 0, 0, rw, rh);
+      const imgData = ctx.getImageData(0, 0, rw, rh);
+      const fullParams = { ...getParams(target), ...candidateParams };
+      processPixels(imgData, rw, rh, target.stats, state.referenceStats, fullParams);
+      return { original: origData, rendered: imgData };
+    };
+
+    const initialParams = {
+      localStrength: +controls.localStrength.value / 100,
+      tone: +controls.toneStrength.value / 100,
+      color: +controls.colorStrength.value / 100,
+      illumination: +controls.illuminationStrength.value / 100,
+      neutralProtect: +controls.neutralProtect.value / 100
+    };
+
+    const optRes = engine.optimizeParameters(
+      renderThumbnail,
+      initialParams,
+      target.stats,
+      state.referenceStats,
+      tw,
+      th,
+      8
+    );
+
+    // Apply optimized values
+    controls.localStrength.value = Math.round(optRes.optimizedParams.localStrength * 100);
+    controls.toneStrength.value = Math.round(optRes.optimizedParams.tone * 100);
+    controls.colorStrength.value = Math.round(optRes.optimizedParams.color * 100);
+    controls.illuminationStrength.value = Math.round(optRes.optimizedParams.illumination * 100);
+    controls.neutralProtect.value = Math.round(optRes.optimizedParams.neutralProtect * 100);
+    updateOutputs();
+
+    target.optimizationMetrics = optRes.finalScore;
+    target.tuned = true;
+    drawPreview();
   }
 
   function autoTuneCurrent() {
@@ -1055,7 +1136,7 @@
     const idx = state.targets.findIndex(t => t.id === id); if (idx < 0) return;
     const [removed] = state.targets.splice(idx, 1); if (removed?.url) URL.revokeObjectURL(removed.url);
     if (state.activeTargetId === id) state.activeTargetId = state.targets[Math.min(idx, state.targets.length - 1)]?.id || null;
-    renderTargetStrip(); updateStructuralMaps();
+    renderTargetStrip();
     if (!state.targets.length) { refs.workspace.classList.add('hidden'); refs.beforeCanvas.width = refs.afterCanvas.width = 0; }
     else if (state.referenceStats) drawPreview();
   }
@@ -1389,13 +1470,13 @@
   refs.curveCanvas.addEventListener('pointerdown', e => { const p = curvePointFromEvent(e); if (p.dist < 34) { state.dragPoint = p.best; refs.curveCanvas.setPointerCapture(e.pointerId); updateCurveDrag(e); } });
   refs.curveCanvas.addEventListener('pointermove', e => { if (state.dragPoint >= 1) updateCurveDrag(e); }); refs.curveCanvas.addEventListener('pointerup', () => { state.dragPoint = -1; }); refs.curveCanvas.addEventListener('pointercancel', () => { state.dragPoint = -1; });
   refs.resetCurveBtn.addEventListener('click', () => { resetCurves(); scheduleProcess(); }); refs.autoTuneBtn.addEventListener('click', autoTuneCurrent); refs.autoTuneAllBtn.addEventListener('click', autoTuneAll);
+  refs.optimizeMatchBtn?.addEventListener('click', () => { const t = activeTarget(); if (t) optimizeTarget(t); });
   refs.mobileAutoTuneBtn.addEventListener('click', autoTuneCurrent); refs.mobileAutoTuneAllBtn.addEventListener('click', autoTuneAll);
   refs.resetBtn.addEventListener('click', resetSharedEdits); refs.resetCurrentBtn.addEventListener('click', resetCurrentCorrection);
   if (refs.newTargetBtn) refs.newTargetBtn.addEventListener('click', () => refs.targetInput.click()); if (refs.addTargetsBtn) refs.addTargetsBtn.addEventListener('click', () => refs.targetInput.click()); if (refs.newReferenceBtn) refs.newReferenceBtn.addEventListener('click', () => refs.referenceInput.click()); if (refs.addReferencesBtn) refs.addReferencesBtn.addEventListener('click', () => refs.referenceInput.click()); if (refs.clearReferencesBtn) refs.clearReferencesBtn.addEventListener('click', clearReferences);
   refs.prevTargetBtn.addEventListener('click', () => selectRelative(-1)); refs.nextTargetBtn.addEventListener('click', () => selectRelative(1));
   refs.exportBtn.addEventListener('click', () => exportCurrent('image/png')); refs.exportJpgBtn.addEventListener('click', () => exportCurrent('image/jpeg', .94)); refs.exportAllBtn.addEventListener('click', exportAllZip); refs.exportLutBtn.addEventListener('click', exportLut);
   refs.upscale2x.addEventListener('change', () => { if (activeTarget() && state.referenceStats) drawPreview(); });
-  refs.structuralToggle?.addEventListener('change', () => { for (const t of state.targets) { t.structuralMaps = null; t.controlNetPayload = null; } updateStructuralMaps(); if (activeTarget() && state.referenceStats) drawPreview(); });
   const blueCastToggles = document.querySelectorAll('.blue-cast-toggle, #blueCastToggleSidebar, #blueCastToggleExport, #blueCastToggle');
   blueCastToggles.forEach(toggle => {
     toggle.addEventListener('change', e => {
