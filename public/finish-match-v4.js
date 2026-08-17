@@ -49,6 +49,7 @@
     exportJpgBtn: $('exportJpgBtn'),
     exportAllBtn: $('exportAllBtn'),
     upscale2x: $('upscale2x'),
+    exportControlNetToggle: $('exportControlNetToggle'),
     blueCastToggle: $('blueCastToggle'),
     batchFormat: $('batchFormat'),
     batchProgress: $('batchProgress'),
@@ -104,6 +105,7 @@
     afterStats: null,
     previewMax: matchMedia('(max-width: 720px), (pointer: coarse)').matches ? 720 : 960,
     processTimer: null,
+    controlNetCacheKey: 'controlnetMaps',
     mode: 'split',
     activeCurve: 'master',
     dragPoint: -1,
@@ -1311,15 +1313,56 @@
     return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Image export failed.')), type, quality));
   }
 
-  async function renderFullTargetBlob(target, type, quality = 1, upscale = false, onProgress = null) {
+  async function renderFullTargetCanvas(target, upscale = false, onProgress = null) {
     const w = target.img.naturalWidth, h = target.img.naturalHeight, c = document.createElement('canvas'); c.width = w; c.height = h;
     const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(target.img, 0, 0, w, h);
     const data = ctx.getImageData(0, 0, w, h); processPixels(data, w, h, target.stats, state.referenceStats, getParams(target)); ctx.putImageData(data, 0, 0);
-    if (!upscale) return canvasBlob(c, type, quality);
+    if (!upscale) return c;
     if (!window.AIUpscaler) throw new Error('AI Super-Resolution engine not loaded. Please reload the page.');
     const out = await window.AIUpscaler.upscaleCanvas(c, onProgress);
     c.width = 1; c.height = 1;
-    return canvasBlob(out, type, quality);
+    return out;
+  }
+
+  function exportControlNetEnabled() { return !!refs.exportControlNetToggle?.checked; }
+
+  function generateControlNetCanny(sourceCanvas) {
+    const w = sourceCanvas.width, h = sourceCanvas.height, c = document.createElement('canvas'); c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(sourceCanvas, 0, 0);
+    const img = ctx.getImageData(0, 0, w, h), d = img.data, gray = new Float32Array(w * h), blur = new Float32Array(w * h), out = ctx.createImageData(w, h);
+    for (let i = 0, p = 0; i < d.length; i += 4, p++) gray[p] = .299 * d[i] + .587 * d[i + 1] + .114 * d[i + 2];
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+      const p = y * w + x;
+      blur[p] = (gray[p] * 4 + gray[p - 1] * 2 + gray[p + 1] * 2 + gray[p - w] * 2 + gray[p + w] * 2 + gray[p - w - 1] + gray[p - w + 1] + gray[p + w - 1] + gray[p + w + 1]) / 16;
+    }
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+      const p = y * w + x, i = p * 4;
+      const gx = -blur[p - w - 1] + blur[p - w + 1] - 2 * blur[p - 1] + 2 * blur[p + 1] - blur[p + w - 1] + blur[p + w + 1];
+      const gy = -blur[p - w - 1] - 2 * blur[p - w] - blur[p - w + 1] + blur[p + w - 1] + 2 * blur[p + w] + blur[p + w + 1];
+      const v = Math.hypot(gx, gy) >= 90 ? 255 : 0; out.data[i] = out.data[i + 1] = out.data[i + 2] = v; out.data[i + 3] = 255;
+    }
+    ctx.putImageData(out, 0, 0); return c;
+  }
+
+  function generateControlNetDepth(sourceCanvas) {
+    const w = sourceCanvas.width, h = sourceCanvas.height, c = document.createElement('canvas'); c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(sourceCanvas, 0, 0);
+    const img = ctx.getImageData(0, 0, w, h), d = img.data;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4, luma = .299 * d[i] + .587 * d[i + 1] + .114 * d[i + 2], vertical = 255 * (1 - y / Math.max(1, h - 1));
+      const v = clamp(luma * .55 + vertical * .45); d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0); return c;
+  }
+
+  async function exportControlNetMaps(sourceCanvas, baseName, addFile) {
+    const cached = sourceCanvas[state.controlNetCacheKey] || (sourceCanvas[state.controlNetCacheKey] = {
+      depth: generateControlNetDepth(sourceCanvas),
+      canny: generateControlNetCanny(sourceCanvas)
+    });
+    const [depthBlob, cannyBlob] = await Promise.all([canvasBlob(cached.depth, 'image/png'), canvasBlob(cached.canny, 'image/png')]);
+    await addFile(`${baseName}_controlnet_depth.png`, depthBlob);
+    await addFile(`${baseName}_controlnet_canny.png`, cannyBlob);
   }
 
   async function exportCurrent(type, quality = 1) {
@@ -1333,14 +1376,17 @@
     }
     try {
       await new Promise(r => setTimeout(r, 20));
-      const blob = await renderFullTargetBlob(target, type, quality, upscale, (pct, text) => {
+      const canvas = await renderFullTargetCanvas(target, upscale, (pct, text) => {
         if (upscale) {
           refs.batchProgressBar.style.width = `${pct}%`;
           refs.batchProgressText.textContent = text;
         }
       });
-      const ext = type === 'image/png' ? 'png' : 'jpg', suffix = upscale ? '_4x_ai' : '';
-      downloadBlob(blob, `${cleanBaseName(target.name)}_colour-match-v5${suffix}.${ext}`);
+      const blob = await canvasBlob(canvas, type, quality);
+      const ext = type === 'image/png' ? 'png' : 'jpg', suffix = upscale ? '_4x_ai' : '', baseName = `${cleanBaseName(target.name)}_colour-match-v5${suffix}`;
+      downloadBlob(blob, `${baseName}.${ext}`);
+      if (exportControlNetEnabled()) await exportControlNetMaps(canvas, baseName, (name, mapBlob) => downloadBlob(mapBlob, name));
+      canvas.width = 1; canvas.height = 1;
     } catch (err) { alert(err.message); }
     finally {
       btn.disabled = false; btn.textContent = old;
@@ -1425,29 +1471,40 @@
     if (!state.referenceStats || !state.targets.length) return;
     const type = refs.batchFormat.value, ext = type === 'image/png' ? 'png' : 'jpg', quality = type === 'image/jpeg' ? .94 : 1, upscale = refs.upscale2x.checked;
     const old = refs.exportAllBtn.textContent; refs.exportAllBtn.disabled = true; refs.exportAllBtn.textContent = 'Processing…'; refs.batchProgress.classList.remove('hidden');
-    const files = [], usedNames = new Map();
+    const files = [], usedNames = new Map(), errors = [];
     try {
       for (let i = 0; i < state.targets.length; i++) {
         const target = state.targets[i];
+        try {
         if (!upscale) {
           const pct = Math.round(i / state.targets.length * 100);
           refs.batchProgressBar.style.width = `${pct}%`;
           refs.batchProgressText.textContent = `Processing ${i + 1} of ${state.targets.length}: ${target.name}`;
         }
         await new Promise(r => setTimeout(r, 16));
-        const blob = await renderFullTargetBlob(target, type, quality, upscale, (pct, text) => {
+        const canvas = await renderFullTargetCanvas(target, upscale, (pct, text) => {
           if (upscale) {
             const overallPct = Math.round(((i + pct / 100) / state.targets.length) * 100);
             refs.batchProgressBar.style.width = `${overallPct}%`;
             refs.batchProgressText.textContent = `Target ${i + 1}/${state.targets.length}: ${text}`;
           }
         });
+        const blob = await canvasBlob(canvas, type, quality);
         const data = new Uint8Array(await blob.arrayBuffer());
         const base = cleanBaseName(target.name); const count = (usedNames.get(base) || 0) + 1; usedNames.set(base, count); const suffix = count > 1 ? `-${count}` : '';
-        files.push({ name: `${base}${suffix}_colour-match-v5${upscale ? '_4x_ai' : ''}.${ext}`, data });
+        const outputBase = `${base}${suffix}_colour-match-v5${upscale ? '_4x_ai' : ''}`;
+        files.push({ name: `${outputBase}.${ext}`, data });
+        if (exportControlNetEnabled()) await exportControlNetMaps(canvas, outputBase, async (name, mapBlob) => files.push({ name, data: new Uint8Array(await mapBlob.arrayBuffer()) }));
+        canvas.width = 1; canvas.height = 1;
+        } catch (err) {
+          console.error('Batch target export failed:', target.name, err);
+          errors.push(`${target.name}: ${err.message || err}`);
+          refs.batchProgressText.textContent = `Skipped ${target.name}: ${err.message || err}`;
+        }
       }
+      if (!files.length) throw new Error(errors.length ? `No files exported. ${errors.join('; ')}` : 'No files exported.');
       refs.batchProgressBar.style.width = '100%'; refs.batchProgressText.textContent = 'Packaging ZIP…'; await new Promise(r => setTimeout(r, 20));
-      downloadBlob(buildZip(files), `colour-match-v5-${state.targets.length}-targets${upscale ? '-4x-ai' : ''}.zip`); refs.batchProgressText.textContent = `Done • ${state.targets.length} files exported`;
+      downloadBlob(buildZip(files), `colour-match-v5-${state.targets.length}-targets${upscale ? '-4x-ai' : ''}.zip`); refs.batchProgressText.textContent = errors.length ? `Done with ${errors.length} warning(s) • ${files.length} files in ZIP` : `Done • ${files.length} files in ZIP`; if (errors.length) console.warn('Batch export warnings:', errors);
     } catch (err) { alert(`Batch export failed: ${err.message}`); }
     finally { refs.exportAllBtn.disabled = false; refs.exportAllBtn.textContent = old; setTimeout(() => refs.batchProgress.classList.add('hidden'), 2200); }
   }
@@ -1460,6 +1517,7 @@
     else { refs.afterLayer.style.display = 'grid'; refs.afterLayer.style.width = '100%'; refs.afterLayer.style.clipPath = 'none'; refs.splitLine.style.display = 'none'; refs.splitSlider.style.display = 'none'; document.querySelector('.before-badge').style.display = 'none'; document.querySelector('.after-badge').style.display = 'block'; }
   }
 
+  if (refs.exportControlNetToggle) refs.exportControlNetToggle.checked = sessionStorage.getItem('exportControlNetDepthCanny') === 'true';
   bindDrop(refs.referenceDrop, refs.referenceInput, 'reference'); bindDrop(refs.targetDrop, refs.targetInput, 'target'); setPasteDestination('reference', false); initHsl(); applyFinishPreset('natural', false); drawCurve(); renderReferenceStack();
   document.querySelectorAll('.finish-preset').forEach(button => button.addEventListener('click', () => applyFinishPreset(button.dataset.preset)));
   sharedControlIds.forEach(id => controls[id].addEventListener('input', () => { updateOutputs(); scheduleProcess(); }));
@@ -1477,6 +1535,7 @@
   refs.prevTargetBtn.addEventListener('click', () => selectRelative(-1)); refs.nextTargetBtn.addEventListener('click', () => selectRelative(1));
   refs.exportBtn.addEventListener('click', () => exportCurrent('image/png')); refs.exportJpgBtn.addEventListener('click', () => exportCurrent('image/jpeg', .94)); refs.exportAllBtn.addEventListener('click', exportAllZip); refs.exportLutBtn.addEventListener('click', exportLut);
   refs.upscale2x.addEventListener('change', () => { if (activeTarget() && state.referenceStats) drawPreview(); });
+  refs.exportControlNetToggle?.addEventListener('change', () => sessionStorage.setItem('exportControlNetDepthCanny', refs.exportControlNetToggle.checked ? 'true' : 'false'));
   const blueCastToggles = document.querySelectorAll('.blue-cast-toggle, #blueCastToggleSidebar, #blueCastToggleExport, #blueCastToggle');
   blueCastToggles.forEach(toggle => {
     toggle.addEventListener('change', e => {
