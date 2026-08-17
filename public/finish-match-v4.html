@@ -130,6 +130,19 @@
             <div class="material-chips" id="targetMaterialChips"></div>
           </div>
 
+          <div class="sub-card score-card">
+            <div class="mini-head"><span>Objective quality score</span><small id="objectiveScoreSummary">ΔE00 / SSIM evaluation</small></div>
+            <div class="score-grid" id="objectiveScoreGrid">
+              <div class="score-item"><span class="score-val" id="scoreOverall">—</span><span class="score-lbl">Overall Match</span></div>
+              <div class="score-item"><span class="score-val" id="scoreColor">—</span><span class="score-lbl">ΔE00 Colour</span></div>
+              <div class="score-item"><span class="score-val" id="scoreStructure">—</span><span class="score-lbl">SSIM Structure</span></div>
+              <div class="score-item"><span class="score-val" id="scoreEdge">—</span><span class="score-lbl">Edge Safety</span></div>
+            </div>
+            <div class="button-row tight" style="margin-top: 8px;">
+              <button class="mini-btn" id="optimizeMatchBtn" type="button">⚡ Optimize match (ΔE00)</button>
+            </div>
+          </div>
+
           <div class="divider"></div>
 
           <div class="auto-finish-card">

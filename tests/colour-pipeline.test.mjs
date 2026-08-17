@@ -257,3 +257,56 @@ test("Illumination estimation and correction", () => {
   // After correction, blue cast should be gently neutralized
   assert.ok(bOut <= 230, "Blue spill was neutralized gently");
 });
+
+test("Objective composite evaluation and parameter optimization bounds", () => {
+  const w = 24;
+  const h = 24;
+  const origData = new Uint8ClampedArray(w * h * 4);
+  const rendData = new Uint8ClampedArray(w * h * 4);
+
+  for (let i = 0; i < w * h * 4; i += 4) {
+    origData[i] = 180;
+    origData[i + 1] = 140;
+    origData[i + 2] = 100;
+    origData[i + 3] = 255;
+
+    rendData[i] = 185;
+    rendData[i + 1] = 142;
+    rendData[i + 2] = 98;
+    rendData[i + 3] = 255;
+  }
+
+  const score = ColorEngine.evaluateCompositeScore(
+    { data: origData },
+    { data: rendData },
+    w,
+    h,
+    {},
+    {}
+  );
+
+  assert.ok(score.overallScore >= 0 && score.overallScore <= 100, `Score is within [0, 100]`);
+  assert.ok(score.structureScore >= 0 && score.structureScore <= 100, `Structure score in [0, 100]`);
+  assert.ok(score.colorScore >= 0 && score.colorScore <= 100, `Color score in [0, 100]`);
+  assert.ok(score.edgeScore >= 0 && score.edgeScore <= 100, `Edge score in [0, 100]`);
+
+  // Test optimizer
+  const dummyRender = (params, rw, rh) => ({
+    original: { data: origData },
+    rendered: { data: rendData }
+  });
+
+  const opt = ColorEngine.optimizeParameters(
+    dummyRender,
+    { localStrength: 0.5, tone: 0.5, color: 0.5, illumination: 0.5, neutralProtect: 0.6 },
+    { materialProfiles: {} },
+    { materialProfiles: {} },
+    w,
+    h,
+    4
+  );
+
+  assert.ok(opt.iterationsRun > 0, "Optimization ran iterations");
+  assert.ok(opt.finalScore.overallScore >= opt.initialScore.overallScore, "Final score >= Initial score");
+  assert.ok(opt.optimizedParams.localStrength >= 0.2 && opt.optimizedParams.localStrength <= 0.95, "Local strength bounded");
+});
