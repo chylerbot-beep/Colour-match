@@ -50,6 +50,7 @@
     exportAllBtn: $('exportAllBtn'),
     upscale2x: $('upscale2x'),
     exportDepthAnythingToggle: $('exportDepthAnythingToggle'),
+    exportDepthAnythingLabel: $('exportDepthAnythingLabel'),
     blueCastToggle: $('blueCastToggle'),
     batchFormat: $('batchFormat'),
     batchProgress: $('batchProgress'),
@@ -106,6 +107,7 @@
     previewMax: matchMedia('(max-width: 720px), (pointer: coarse)').matches ? 720 : 960,
     processTimer: null,
     depthAnythingCacheKey: 'depthAnythingV2Map',
+    heuristicDepthCacheKey: 'heuristicDepthPreviewMap',
     mode: 'split',
     activeCurve: 'master',
     dragPoint: -1,
@@ -1326,7 +1328,7 @@
 
   function exportDepthAnythingEnabled() { return !!refs.exportDepthAnythingToggle?.checked; }
 
-  function generateDepthAnythingV2Map(sourceCanvas) {
+  function generateHeuristicDepthPreviewMap(sourceCanvas) {
     const w = sourceCanvas.width, h = sourceCanvas.height, c = document.createElement('canvas'); c.width = w; c.height = h;
     const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(sourceCanvas, 0, 0);
     const img = ctx.getImageData(0, 0, w, h), d = img.data;
@@ -1345,10 +1347,36 @@
     ctx.putImageData(img, 0, 0); return c;
   }
 
+  async function requestDepthAnythingV2Map(sourceCanvas) {
+    const sourceBlob = await canvasBlob(sourceCanvas, 'image/png');
+    const formData = new FormData();
+    formData.append('image', sourceBlob, 'source.png');
+    const response = await fetch('/api/depth-anything-v2', { method: 'POST', body: formData });
+    if (!response.ok) throw new Error('Depth Anything V2 backend is unavailable.');
+    return response.blob();
+  }
+
   async function exportDepthAnythingMaps(sourceCanvas, baseName, addFile) {
-    const cached = sourceCanvas[state.depthAnythingCacheKey] || (sourceCanvas[state.depthAnythingCacheKey] = generateDepthAnythingV2Map(sourceCanvas));
-    const depthBlob = await canvasBlob(cached, 'image/png');
-    await addFile(`${baseName}_depth_anything_v2.png`, depthBlob);
+    try {
+      const depthBlob = sourceCanvas[state.depthAnythingCacheKey] || (sourceCanvas[state.depthAnythingCacheKey] = await requestDepthAnythingV2Map(sourceCanvas));
+      await addFile(`${baseName}_depth_anything_v2.png`, depthBlob);
+    } catch (error) {
+      const fallback = sourceCanvas[state.heuristicDepthCacheKey] || (sourceCanvas[state.heuristicDepthCacheKey] = generateHeuristicDepthPreviewMap(sourceCanvas));
+      const depthBlob = await canvasBlob(fallback, 'image/png');
+      await addFile(`${baseName}_heuristic_depth_proxy.png`, depthBlob);
+      console.warn(error);
+    }
+  }
+
+  async function updateDepthExportAvailabilityLabel() {
+    if (!refs.exportDepthAnythingLabel) return;
+    try {
+      const response = await fetch('/api/depth-anything-v2', { method: 'GET', cache: 'no-store' });
+      const status = response.ok ? await response.json() : null;
+      refs.exportDepthAnythingLabel.textContent = status?.available ? 'Export Depth Anything V2' : 'Export heuristic depth proxy';
+    } catch {
+      refs.exportDepthAnythingLabel.textContent = 'Export heuristic depth proxy';
+    }
   }
 
   async function exportCurrent(type, quality = 1) {
@@ -1504,6 +1532,7 @@
   }
 
   if (refs.exportDepthAnythingToggle) refs.exportDepthAnythingToggle.checked = sessionStorage.getItem('exportDepthAnythingV2') === 'true';
+  updateDepthExportAvailabilityLabel();
   bindDrop(refs.referenceDrop, refs.referenceInput, 'reference'); bindDrop(refs.targetDrop, refs.targetInput, 'target'); setPasteDestination('reference', false); initHsl(); applyFinishPreset('natural', false); drawCurve(); renderReferenceStack();
   document.querySelectorAll('.finish-preset').forEach(button => button.addEventListener('click', () => applyFinishPreset(button.dataset.preset)));
   sharedControlIds.forEach(id => controls[id].addEventListener('input', () => { updateOutputs(); scheduleProcess(); }));
