@@ -125,6 +125,24 @@
             <canvas id="targetHistogram" class="histogram" width="360" height="120"></canvas>
           </div>
 
+          <div class="sub-card">
+            <div class="mini-head"><span>Detected material ROIs</span><small>Semantic confidence</small></div>
+            <div class="material-chips" id="targetMaterialChips"></div>
+          </div>
+
+          <div class="sub-card score-card">
+            <div class="mini-head"><span>Objective quality score</span><small id="objectiveScoreSummary">ΔE00 / SSIM evaluation</small></div>
+            <div class="score-grid" id="objectiveScoreGrid">
+              <div class="score-item"><span class="score-val" id="scoreOverall">—</span><span class="score-lbl">Overall Match</span></div>
+              <div class="score-item"><span class="score-val" id="scoreColor">—</span><span class="score-lbl">ΔE00 Colour</span></div>
+              <div class="score-item"><span class="score-val" id="scoreStructure">—</span><span class="score-lbl">SSIM Structure</span></div>
+              <div class="score-item"><span class="score-val" id="scoreEdge">—</span><span class="score-lbl">Edge Safety</span></div>
+            </div>
+            <div class="button-row tight" style="margin-top: 8px;">
+              <button class="mini-btn" id="optimizeMatchBtn" type="button">⚡ Optimize match (ΔE00)</button>
+            </div>
+          </div>
+
           <div class="divider"></div>
 
           <div class="auto-finish-card">
@@ -150,6 +168,10 @@
             <label><span>Colour match</span><output id="colorStrengthOut">55</output></label>
             <input type="range" id="colorStrength" min="0" max="100" value="55" />
           </div>
+          <div class="control-group">
+            <label><span>Material & local match</span><output id="localStrengthOut">62</output></label>
+            <input type="range" id="localStrength" min="0" max="100" value="62" />
+          </div>
           <div class="control-group compact">
             <label><span>Three-way colour</span><output id="threeWayStrengthOut">45</output></label>
             <input type="range" id="threeWayStrength" min="0" max="100" value="45" />
@@ -174,6 +196,14 @@
           <details open>
             <summary>Automatic finishing</summary>
             <div class="details-body">
+              <div class="control-group compact">
+                <label><span>Illumination balance</span><output id="illuminationStrengthOut">52</output></label>
+                <input type="range" id="illuminationStrength" min="0" max="100" value="52" />
+              </div>
+              <div class="control-group compact">
+                <label><span>Edge & boundary safety</span><output id="edgeSafetyStrengthOut">85</output></label>
+                <input type="range" id="edgeSafetyStrength" min="0" max="100" value="85" />
+              </div>
               <div class="control-group compact">
                 <label><span>Highlight roll-off</span><output id="highlightRolloffOut">72</output></label>
                 <input type="range" id="highlightRolloff" min="0" max="100" value="72" />
@@ -381,6 +411,7 @@
   <script async src="https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.9.0-release.1/dist/opencv.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.webgpu.min.js"></script>
   <script src="vendor/pica.min.js"></script>
+  <script src="color-engine.js"></script>
   <script src="ai-upscaler.js"></script>
   <script src="finish-match-v4.js"></script>
 </body>
