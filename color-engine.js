@@ -17,10 +17,14 @@
 // ==========================================
 
 function clamp(v, min, max) {
+  // FIX: Intercept NaN to prevent black box poisoning
+  if (Number.isNaN(v)) return min; 
   return v < min ? min : v > max ? max : v;
 }
 
 function clamp01(v) {
+  // FIX: Intercept NaN to prevent black box poisoning
+  if (Number.isNaN(v)) return 0;
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
@@ -29,15 +33,18 @@ function lerp(a, b, t) {
 }
 
 function smoothstep(edge0, edge1, x) {
+  // Safe max protects against division by exactly zero
   const t = clamp01((x - edge0) / Math.max(1e-6, edge1 - edge0));
   return t * t * (3 - 2 * t);
 }
 
 function circularHueDelta(from, to) {
+  if (Number.isNaN(from) || Number.isNaN(to)) return 0;
   return (to - from + 540) % 360 - 180;
 }
 
 function circularDistance(a, b) {
+  if (Number.isNaN(a) || Number.isNaN(b)) return 0;
   const d = Math.abs(a - b) % 360;
   return d > 180 ? 360 - d : d;
 }
@@ -128,7 +135,7 @@ function labToRgb(L, a, b) {
 }
 
 function labToLch(L, a, b) {
-  const C = Math.sqrt(a * a + b * b);
+  const C = Math.sqrt(Math.max(0, a * a + b * b)); // FIX: Clamp to >=0 before sqrt
   let h = (Math.atan2(b, a) * 180) / Math.PI;
   if (h < 0) h += 360;
   return [L, C, h];
@@ -160,18 +167,19 @@ function deltaE2000(lab1, lab2) {
   const [L2, a2, b2] = lab2;
 
   const avgL = (L1 + L2) / 2;
-  const C1 = Math.sqrt(a1 * a1 + b1 * b1);
-  const C2 = Math.sqrt(a2 * a2 + b2 * b2);
+  const C1 = Math.sqrt(Math.max(0, a1 * a1 + b1 * b1));
+  const C2 = Math.sqrt(Math.max(0, a2 * a2 + b2 * b2));
   const avgC = (C1 + C2) / 2;
 
   const avgC7 = Math.pow(avgC, 7);
-  const G = 0.5 * (1 - Math.sqrt(avgC7 / (avgC7 + 6103515625))); // 25^7 = 6103515625
+  // FIX: clamp domain to positive before Math.sqrt 
+  const G = 0.5 * (1 - Math.sqrt(Math.max(0, avgC7 / (avgC7 + 6103515625)))); 
 
   const a1p = (1 + G) * a1;
   const a2p = (1 + G) * a2;
 
-  const C1p = Math.sqrt(a1p * a1p + b1 * b1);
-  const C2p = Math.sqrt(a2p * a2p + b2 * b2);
+  const C1p = Math.sqrt(Math.max(0, a1p * a1p + b1 * b1));
+  const C2p = Math.sqrt(Math.max(0, a2p * a2p + b2 * b2));
   const avgCp = (C1p + C2p) / 2;
 
   let h1p = (Math.atan2(b1, a1p) * 180) / Math.PI;
@@ -204,23 +212,24 @@ function deltaE2000(lab1, lab2) {
 
   const deltaLp = L2 - L1;
   const deltaCp = C2p - C1p;
-  const deltaHp = 2 * Math.sqrt(C1p * C2p) * Math.sin(((deltahp / 2) * Math.PI) / 180);
+  // FIX: clamp domain to positive before Math.sqrt 
+  const deltaHp = 2 * Math.sqrt(Math.max(0, C1p * C2p)) * Math.sin(((deltahp / 2) * Math.PI) / 180);
 
   const avgLMinus50Sq = (avgL - 50) * (avgL - 50);
-  const SL = 1 + (0.015 * avgLMinus50Sq) / Math.sqrt(20 + avgLMinus50Sq);
+  const SL = 1 + (0.015 * avgLMinus50Sq) / Math.sqrt(Math.max(1e-6, 20 + avgLMinus50Sq)); // Safe eps
   const SC = 1 + 0.045 * avgCp;
   const SH = 1 + 0.015 * avgCp * T;
 
   const deltaTheta = 30 * Math.exp(-Math.pow((avghp - 275) / 25, 2));
   const avgCp7 = Math.pow(avgCp, 7);
-  const RC = 2 * Math.sqrt(avgCp7 / (avgCp7 + 6103515625));
+  const RC = 2 * Math.sqrt(Math.max(0, avgCp7 / (avgCp7 + 6103515625)));
   const RT = -Math.sin(((2 * deltaTheta) * Math.PI) / 180) * RC;
 
-  const dL = deltaLp / SL;
-  const dC = deltaCp / SC;
-  const dH = deltaHp / SH;
+  const dL = deltaLp / Math.max(1e-6, SL);
+  const dC = deltaCp / Math.max(1e-6, SC);
+  const dH = deltaHp / Math.max(1e-6, SH);
 
-  return Math.sqrt(dL * dL + dC * dC + dH * dH + RT * dC * dH);
+  return Math.sqrt(Math.max(0, dL * dL + dC * dC + dH * dH + RT * dC * dH));
 }
 
 // ==========================================
