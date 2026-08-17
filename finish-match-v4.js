@@ -49,6 +49,8 @@
     exportJpgBtn: $('exportJpgBtn'),
     exportAllBtn: $('exportAllBtn'),
     upscale2x: $('upscale2x'),
+    exportDepthAnythingToggle: $('exportDepthAnythingToggle'),
+    exportDepthAnythingLabel: $('exportDepthAnythingLabel'),
     blueCastToggle: $('blueCastToggle'),
     batchFormat: $('batchFormat'),
     batchProgress: $('batchProgress'),
@@ -73,26 +75,12 @@
     illuminationStrength: $('illuminationStrength'),
     edgeSafetyStrength: $('edgeSafetyStrength'),
     targetMaterialChips: $('targetMaterialChips'),
+    objectiveScoreSummary: $('objectiveScoreSummary'),
     scoreOverall: $('scoreOverall'),
     scoreColor: $('scoreColor'),
     scoreStructure: $('scoreStructure'),
     scoreEdge: $('scoreEdge'),
-    optimizeMatchBtn: $('optimizeMatchBtn'),
-    depthModeBtn: $('depthModeBtn'),
-    open3DBtn: $('open3DBtn'),
-    depthCanvasView: $('depthCanvasView'),
-    depthBadge: $('depthBadge'),
-    estimateDepthBtn: $('estimateDepthBtn'),
-    exportDepthBtn: $('exportDepthBtn'),
-    depthModal3D: $('depthModal3D'),
-    close3DModalBtn: $('close3DModalBtn'),
-    depth3DContainer: $('depth3DContainer'),
-    pointSizeSlider: $('pointSizeSlider'),
-    pointSizeVal: $('pointSizeVal'),
-    depthScaleSlider: $('depthScaleSlider'),
-    depthScaleVal: $('depthScaleVal'),
-    depthColormapSelect: $('depthColormapSelect'),
-    reset3DCameraBtn: $('reset3DCameraBtn')
+    optimizeMatchBtn: $('optimizeMatchBtn')
   };
 
   const sharedControlIds = [
@@ -118,6 +106,8 @@
     afterStats: null,
     previewMax: matchMedia('(max-width: 720px), (pointer: coarse)').matches ? 720 : 960,
     processTimer: null,
+    depthAnythingCacheKey: 'depthAnythingV2Map',
+    heuristicDepthCacheKey: 'heuristicDepthPreviewMap',
     mode: 'split',
     activeCurve: 'master',
     dragPoint: -1,
@@ -1046,50 +1036,8 @@
     }
   }
 
-  function setPreviewMode(mode) {
-    state.mode = mode;
-    document.querySelectorAll('.seg').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
-    refs.compareWrap.classList.toggle('view-depth', mode === 'depth');
-    refs.depthBadge.classList.toggle('hidden', mode !== 'depth');
-
-    if (mode === 'split') {
-      refs.afterLayer.style.width = '100%';
-      refs.afterLayer.style.clipPath = `inset(0 0 0 ${refs.splitSlider.value}%)`;
-      refs.afterLayer.style.display = 'grid';
-      refs.splitLine.style.display = 'block';
-      refs.splitSlider.style.display = 'block';
-      document.querySelector('.before-badge').style.display = 'block';
-      document.querySelector('.after-badge').style.display = 'block';
-    } else if (mode === 'before') {
-      refs.afterLayer.style.display = 'none';
-      refs.splitLine.style.display = 'none';
-      refs.splitSlider.style.display = 'none';
-      document.querySelector('.after-badge').style.display = 'none';
-      document.querySelector('.before-badge').style.display = 'block';
-    } else if (mode === 'after') {
-      refs.afterLayer.style.display = 'grid';
-      refs.afterLayer.style.width = '100%';
-      refs.afterLayer.style.clipPath = 'none';
-      refs.splitLine.style.display = 'none';
-      refs.splitSlider.style.display = 'none';
-      document.querySelector('.before-badge').style.display = 'none';
-      document.querySelector('.after-badge').style.display = 'block';
-    } else if (mode === 'depth') {
-      refs.afterLayer.style.display = 'none';
-      refs.splitLine.style.display = 'none';
-      refs.splitSlider.style.display = 'none';
-      document.querySelector('.before-badge').style.display = 'none';
-      document.querySelector('.after-badge').style.display = 'none';
-      const target = activeTarget();
-      if (target && !target.depthCanvas) {
-        estimateCurrentTargetDepth();
-      }
-    }
-  }
-
   function processPixels(imageData, w, h, srcStats, refStats, params) {
     const engine = (typeof ColorEngine !== 'undefined' ? ColorEngine : (typeof window !== 'undefined' ? window.ColorEngine : null));
-    const target = activeTarget();
     const d = imageData.data;
     const luts = {
       master: curveLUT(state.curves.master),
@@ -1102,8 +1050,6 @@
 
     const edgeSafety = srcStats?.edgeSafety || (engine ? engine.computeEdgeSafetyMap(engine.computeEdgeMap(imageData, w, h), w, h) : null);
     const illumField = srcStats?.illuminationField || null;
-    const rawDepth = target?.rawDepth || null;
-    const depthGradients = target?.depthGradients || null;
 
     for (let y = 0; y < h; y++) {
       const ny = h > 1 ? y / (h - 1) : .5;
@@ -1141,14 +1087,6 @@
           );
         }
 
-        // 4. In-Browser Depth Anything 3D Spatial Tonal Grading
-        if (engine && rawDepth && params.localDepth > 0.04 && engine.applyDepthTonalGrading) {
-          const depthIdx = yw + x;
-          const dVal = rawDepth[depthIdx < rawDepth.length ? depthIdx : 0];
-          const dGrad = depthGradients ? depthGradients[depthIdx < depthGradients.length ? depthIdx : 0] : 0;
-          [r, g, b] = engine.applyDepthTonalGrading(r, g, b, dVal, dGrad, params);
-        }
-
         d[i] = r;
         d[i + 1] = g;
         d[i + 2] = b;
@@ -1167,32 +1105,566 @@
     renderTargetDiagnosis(target); syncTrimControls();
     const max = state.previewMax, scale = Math.min(1, max / Math.max(target.img.naturalWidth, target.img.naturalHeight));
     const w = Math.round(target.img.naturalWidth * scale), h = Math.round(target.img.naturalHeight * scale);
-    [refs.beforeCanvas, refs.afterCanvas, refs.depthCanvasView].forEach(c => { if (c) { c.width = w; c.height = h; } });
-    const bctx = refs.beforeCanvas.getContext('2d', { willReadFrequently: true });
-    const actx = refs.afterCanvas.getContext('2d', { willReadFrequently: true });
-    bctx.drawImage(target.img, 0, 0, w, h);
-    actx.drawImage(target.img, 0, 0, w, h);
-    const data = actx.getImageData(0, 0, w, h);
-    processPixels(data, w, h, target.stats, state.referenceStats, getParams(target));
-    actx.putImageData(data, 0, 0);
-
-    // Draw Depth Map preview if available
-    if (target.depthCanvas && refs.depthCanvasView) {
-      const dctx = refs.depthCanvasView.getContext('2d');
-      dctx.drawImage(target.depthCanvas, 0, 0, w, h);
-    }
-
-    state.afterStats = analyzeImageData(data, w, h);
-    drawHistogram(refs.targetHistogram, target.stats.hist, 'y', state.afterStats.hist);
+    [refs.beforeCanvas, refs.afterCanvas].forEach(c => { c.width = w; c.height = h; });
+    const bctx = refs.beforeCanvas.getContext('2d', { willReadFrequently: true }), actx = refs.afterCanvas.getContext('2d', { willReadFrequently: true });
+    bctx.drawImage(target.img, 0, 0, w, h); actx.drawImage(target.img, 0, 0, w, h);
+    const data = actx.getImageData(0, 0, w, h); processPixels(data, w, h, target.stats, state.referenceStats, getParams(target)); actx.putImageData(data, 0, 0);
+    state.afterStats = analyzeImageData(data, w, h); drawHistogram(refs.targetHistogram, target.stats.hist, 'y', state.afterStats.hist);
     refs.compareWrap.classList.remove('updating');
     const exportMode = refs.upscale2x.checked ? 'AI Super-Resolution on export' : 'export keeps original resolution';
-    const depthInfo = target.depthCanvas ? ' • Depth Anything active' : '';
-    refs.resultNote.textContent = `Automatic ${capitalize(state.finishPreset)} finish • Edge-aware luminosity • Target ${state.targets.indexOf(target) + 1} of ${state.targets.length}${depthInfo} • AFTER is on the right • ${exportMode}`;
-    updateBatchSummary();
-    syncCompareSize();
-    drawCurve();
+    refs.resultNote.textContent = `Automatic ${capitalize(state.finishPreset)} finish • Edge-aware luminosity • Target ${state.targets.indexOf(target) + 1} of ${state.targets.length} • AFTER is on the right • ${exportMode}`;
+    updateBatchSummary(); syncCompareSize(); drawCurve();
   }
 
+  function scheduleProcess() {
+    clearTimeout(state.processTimer);
+    refs.compareWrap.classList.add('updating');
+    state.processTimer = setTimeout(() => { if (state.referenceStats && activeTarget()) drawPreview(); }, 120);
+  }
+  function syncCompareSize() {
+    const c = refs.beforeCanvas; if (!c.width) return;
+    requestAnimationFrame(() => {
+      const rect = c.getBoundingClientRect(), wrap = refs.compareWrap.getBoundingClientRect(); refs.afterCanvas.style.position = 'absolute';
+      refs.afterCanvas.style.left = (rect.left - wrap.left) + 'px'; refs.afterCanvas.style.top = (rect.top - wrap.top) + 'px'; refs.afterCanvas.style.width = rect.width + 'px'; refs.afterCanvas.style.height = rect.height + 'px';
+    });
+  }
+
+  function updateBatchSummary() {
+    const tuned = state.targets.filter(t => t.tuned).length;
+    refs.batchSummary.textContent = `${state.targets.length} target${state.targets.length === 1 ? '' : 's'} • ${tuned} auto-finished`;
+  }
+
+  function syncTrimControls() {
+    const t = activeTarget(), c = t?.correction || defaultCorrection();
+    controls.trimExposure.value = c.exposure; controls.trimContrast.value = c.contrast; controls.trimWarmth.value = c.warmth; controls.trimTint.value = c.tint; updateOutputs();
+  }
+
+  function writeTrimFromControls() {
+    const t = activeTarget(); if (!t) return;
+    const c = { exposure: +controls.trimExposure.value, contrast: +controls.trimContrast.value, warmth: +controls.trimWarmth.value, tint: +controls.trimTint.value };
+    t.correction = c; t.tuned = false;
+    renderTargetStrip(); updateBatchSummary(); scheduleProcess();
+  }
+
+  function autoTuneTarget(target) {
+    if (!target || !state.referenceStats) return;
+    const r = state.referenceStats, t = target.stats;
+    const medianEv = Math.log2((r.p50 + .035) / (t.p50 + .035));
+    const contrastRatio = r.stdY / Math.max(.08, t.stdY);
+    const tempDelta = r.temperature - t.temperature, tintDelta = r.tint - t.tint;
+    target.correction = {
+      exposure: Math.round(clamp(medianEv * 18, -18, 18)),
+      contrast: Math.round(clamp((contrastRatio - 1) * 14, -10, 10)),
+      warmth: Math.round(clamp(tempDelta * 180, -12, 12)),
+      tint: Math.round(clamp(tintDelta * 170, -10, 10))
+    };
+    target.tuned = true;
+  }
+
+  function optimizeTarget(target) {
+    if (!target || !state.referenceStats) return;
+    const engine = (typeof ColorEngine !== 'undefined' ? ColorEngine : (typeof window !== 'undefined' ? window.ColorEngine : null));
+    if (!engine) return;
+
+    // Fast thumbnail render for coordinate search
+    const tw = 240, th = Math.max(2, Math.round(target.img.naturalHeight * (240 / target.img.naturalWidth)));
+    const origC = document.createElement('canvas'); origC.width = tw; origC.height = th;
+    const origCtx = origC.getContext('2d', { willReadFrequently: true });
+    origCtx.drawImage(target.img, 0, 0, tw, th);
+    const origData = origCtx.getImageData(0, 0, tw, th);
+
+    const renderThumbnail = (candidateParams, rw, rh) => {
+      const c = document.createElement('canvas'); c.width = rw; c.height = rh;
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(target.img, 0, 0, rw, rh);
+      const imgData = ctx.getImageData(0, 0, rw, rh);
+      const fullParams = { ...getParams(target), ...candidateParams };
+      processPixels(imgData, rw, rh, target.stats, state.referenceStats, fullParams);
+      return { original: origData, rendered: imgData };
+    };
+
+    const initialParams = {
+      localStrength: +controls.localStrength.value / 100,
+      tone: +controls.toneStrength.value / 100,
+      color: +controls.colorStrength.value / 100,
+      illumination: +controls.illuminationStrength.value / 100,
+      neutralProtect: +controls.neutralProtect.value / 100
+    };
+
+    const optRes = engine.optimizeParameters(
+      renderThumbnail,
+      initialParams,
+      target.stats,
+      state.referenceStats,
+      tw,
+      th,
+      8
+    );
+
+    // Apply optimized values
+    controls.localStrength.value = Math.round(optRes.optimizedParams.localStrength * 100);
+    controls.toneStrength.value = Math.round(optRes.optimizedParams.tone * 100);
+    controls.colorStrength.value = Math.round(optRes.optimizedParams.color * 100);
+    controls.illuminationStrength.value = Math.round(optRes.optimizedParams.illumination * 100);
+    controls.neutralProtect.value = Math.round(optRes.optimizedParams.neutralProtect * 100);
+    updateOutputs();
+
+    target.optimizationMetrics = optRes.finalScore;
+    target.tuned = true;
+    drawPreview();
+  }
+
+  function autoTuneCurrent() {
+    const t = activeTarget(); if (!t) return; autoTuneTarget(t);
+    syncTrimControls(); renderTargetStrip(); drawPreview();
+  }
+
+  function autoTuneAll() {
+    if (!state.referenceStats) return;
+    for (const t of state.targets) autoTuneTarget(t);
+    syncTrimControls(); renderTargetStrip(); drawPreview();
+  }
+
+  function resetCurrentCorrection() {
+    const t = activeTarget(); if (!t) return; t.correction = defaultCorrection(); t.tuned = false;
+    syncTrimControls(); renderTargetStrip(); drawPreview();
+  }
+
+  function setActiveTarget(id, shouldScroll = false) {
+    if (!state.targets.some(t => t.id === id)) return;
+    state.activeTargetId = id; renderTargetStrip(); syncTrimControls(); if (state.referenceStats) drawPreview();
+    if (shouldScroll) refs.compareWrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  function selectRelative(delta) {
+    if (!state.targets.length) return; const current = state.targets.findIndex(t => t.id === state.activeTargetId); const next = (Math.max(0, current) + delta + state.targets.length) % state.targets.length; setActiveTarget(state.targets[next].id);
+  }
+
+  function renderTargetStack() {
+    refs.targetStack.innerHTML = '';
+    const recent = state.targets.slice(-3);
+    recent.forEach(t => { const img = document.createElement('img'); img.src = t.url; img.alt = ''; refs.targetStack.appendChild(img); });
+    if (state.targets.length) {
+      const count = document.createElement('span'); count.className = 'stack-count'; count.textContent = `${state.targets.length} target${state.targets.length === 1 ? '' : 's'}`; refs.targetStack.appendChild(count);
+      refs.targetDrop.querySelector('.dropzone').classList.add('has-targets'); refs.targetUploadFooter.classList.remove('hidden');
+    } else {
+      refs.targetDrop.querySelector('.dropzone').classList.remove('has-targets'); refs.targetUploadFooter.classList.add('hidden');
+    }
+    refs.targetCountLabel.textContent = `${state.targets.length} target${state.targets.length === 1 ? '' : 's'} loaded`;
+  }
+
+  function renderTargetStrip() {
+    refs.targetStrip.innerHTML = '';
+    state.targets.forEach((t, index) => {
+      const item = document.createElement('div'); item.className = `target-thumb${t.id === state.activeTargetId ? ' active' : ''}${t.tuned ? ' tuned' : ''}`; item.tabIndex = 0; item.setAttribute('role', 'button'); item.setAttribute('aria-label', `Open ${t.name}`);
+      item.innerHTML = `<img src="${t.url}" alt=""><span class="thumb-status" title="${t.tuned ? 'Auto tuned' : 'Not auto tuned'}"></span><button class="thumb-remove" type="button" aria-label="Remove target">×</button><span class="thumb-label">${index + 1}. ${escapeHtml(t.name)}</span>`;
+      item.addEventListener('click', e => { if (!e.target.classList.contains('thumb-remove')) setActiveTarget(t.id); });
+      item.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveTarget(t.id); } });
+      item.querySelector('.thumb-remove').addEventListener('click', e => { e.stopPropagation(); removeTarget(t.id); });
+      refs.targetStrip.appendChild(item);
+    });
+    updateBatchSummary(); renderTargetStack();
+  }
+
+  function escapeHtml(s) { return String(s).replace(/[&<>'"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[ch])); }
+
+  function removeTarget(id) {
+    const idx = state.targets.findIndex(t => t.id === id); if (idx < 0) return;
+    const [removed] = state.targets.splice(idx, 1); if (removed?.url) URL.revokeObjectURL(removed.url);
+    if (state.activeTargetId === id) state.activeTargetId = state.targets[Math.min(idx, state.targets.length - 1)]?.id || null;
+    renderTargetStrip();
+    if (!state.targets.length) { refs.workspace.classList.add('hidden'); refs.beforeCanvas.width = refs.afterCanvas.width = 0; }
+    else if (state.referenceStats) drawPreview();
+  }
+
+  function showWorkspaceIfReady(scroll = false) {
+    if (state.targets.length && state.referenceStats) {
+      for (const target of state.targets) if (!target.tuned) autoTuneTarget(target);
+      refs.workspace.classList.remove('hidden'); renderReferenceAnalysis(state.referenceStats); renderTargetStrip(); drawPreview();
+      if (scroll) setTimeout(() => refs.workspace.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+    }
+  }
+
+  function loadImageElement(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file), img = new Image();
+      img.onload = () => resolve({ img, url }); img.onerror = () => { URL.revokeObjectURL(url); reject(new Error(`Could not load ${file.name}`)); }; img.src = url;
+    });
+  }
+
+  function renderReferenceStack() {
+    refs.referenceStack.innerHTML = ''; const recent = state.references.slice(-3); recent.forEach(r => { const img = document.createElement('img'); img.src = r.url; img.alt = ''; refs.referenceStack.appendChild(img); });
+    const countValue = state.references.length || state.referenceStats?.referenceCount || 0;
+    if (countValue || state.loadedProfile) {
+      const count = document.createElement('span'); count.className = 'stack-count'; count.textContent = state.loadedProfile && !state.references.length ? `Saved profile • ${countValue || 1} ref${countValue === 1 ? '' : 's'}` : `${countValue} reference${countValue === 1 ? '' : 's'}`; refs.referenceStack.appendChild(count);
+      refs.referenceDrop.querySelector('.dropzone').classList.add('has-references'); refs.referenceUploadFooter.classList.remove('hidden');
+    } else { refs.referenceDrop.querySelector('.dropzone').classList.remove('has-references'); refs.referenceUploadFooter.classList.add('hidden'); }
+    refs.referenceCountLabel.textContent = state.loadedProfile && !state.references.length ? `Saved profile loaded • ${countValue || 1} reference${countValue === 1 ? '' : 's'}` : `${countValue} reference${countValue === 1 ? '' : 's'} loaded`;
+  }
+
+  function rebuildReferenceProfile(scroll = false) {
+    state.referenceStats = aggregateReferenceStats(state.references.map(r => r.stats)); state.loadedProfile = null; for (const t of state.targets) { t.correction = defaultCorrection(); t.tuned = false; }
+    renderReferenceStack(); if (state.referenceStats) renderReferenceAnalysis(state.referenceStats); renderTargetStrip(); showWorkspaceIfReady(scroll);
+  }
+
+  function clearReferences() {
+    for (const r of state.references) if (r.url) URL.revokeObjectURL(r.url); state.references = []; state.referenceStats = null; state.loadedProfile = null; refs.referenceInput.value = ''; renderReferenceStack(); refs.workspace.classList.add('hidden');
+  }
+
+  async function loadReferenceFiles(fileList) {
+    const files = Array.from(fileList || []).filter(f => f.type.startsWith('image/')); if (!files.length) return; if (state.loadedProfile && !state.references.length) { state.referenceStats = null; state.loadedProfile = null; }
+    const existing = new Set(state.references.map(r => `${r.name}|${r.size}|${r.lastModified}`)); let added = 0;
+    for (const file of files) { const key = `${file.name}|${file.size}|${file.lastModified}`; if (existing.has(key)) continue; try { const { img, url } = await loadImageElement(file); const stats = hydrateStats(analyzeImage(img)); state.references.push({ id: `r${++state.referenceSeq}`, name: file.name, size: file.size, lastModified: file.lastModified, img, url, stats }); existing.add(key); added++; } catch (err) { console.warn(err); } }
+    refs.referenceInput.value = ''; if (added) rebuildReferenceProfile(true); else renderReferenceStack();
+  }
+
+  async function loadTargetFiles(fileList) {
+    const files = Array.from(fileList || []).filter(f => f.type.startsWith('image/'));
+    if (!files.length) return;
+    const existing = new Set(state.targets.map(t => `${t.name}|${t.size}|${t.lastModified}`));
+    let added = 0;
+    for (const file of files) {
+      const key = `${file.name}|${file.size}|${file.lastModified}`; if (existing.has(key)) continue;
+      try {
+        const { img, url } = await loadImageElement(file); const stats = hydrateStats(analyzeImage(img));
+        const target = { id: `t${++state.targetSeq}`, name: file.name, size: file.size, lastModified: file.lastModified, img, url, stats, correction: defaultCorrection(), tuned: false };
+        state.targets.push(target); existing.add(key); added++; if (!state.activeTargetId) state.activeTargetId = target.id;
+      } catch (err) { console.warn(err); }
+    }
+    refs.targetInput.value = ''; renderTargetStrip(); showWorkspaceIfReady(added > 0 && !!state.referenceStats);
+  }
+
+  function bindDrop(card, input, kind) {
+    ['dragenter', 'dragover'].forEach(ev => card.addEventListener(ev, e => { e.preventDefault(); card.classList.add('drag'); }));
+    ['dragleave', 'drop'].forEach(ev => card.addEventListener(ev, e => { e.preventDefault(); card.classList.remove('drag'); }));
+    card.addEventListener('drop', e => kind === 'reference' ? loadReferenceFiles(e.dataTransfer.files) : loadTargetFiles(e.dataTransfer.files));
+    input.addEventListener('change', () => kind === 'reference' ? loadReferenceFiles(input.files) : loadTargetFiles(input.files));
+  }
+
+  function setPasteDestination(kind, announce = true) {
+    state.pasteDestination = kind === 'target' ? 'target' : 'reference';
+    const isReference = state.pasteDestination === 'reference';
+    refs.referenceDrop.classList.toggle('paste-active', isReference);
+    refs.targetDrop.classList.toggle('paste-active', !isReference);
+    refs.pasteToReferencesBtn.setAttribute('aria-pressed', String(isReference));
+    refs.pasteToTargetsBtn.setAttribute('aria-pressed', String(!isReference));
+    refs.pasteDestinationLabel.textContent = isReference ? 'References' : 'Targets';
+    if (announce) {
+      refs.pasteHelper.classList.remove('paste-success');
+      refs.pasteHelper.classList.add('paste-ready');
+      setTimeout(() => refs.pasteHelper.classList.remove('paste-ready'), 900);
+    }
+  }
+
+  function pastedImageFiles(event) {
+    const files = [];
+    const clipboard = event.clipboardData;
+    if (!clipboard) return files;
+    for (const item of Array.from(clipboard.items || [])) {
+      if (item.kind !== 'file' || !item.type.startsWith('image/')) continue;
+      const blob = item.getAsFile();
+      if (!blob) continue;
+      const ext = (blob.type.split('/')[1] || 'png').replace('jpeg', 'jpg').replace(/[^a-z0-9]/gi, '') || 'png';
+      files.push(new File([blob], `pasted-screenshot-${++state.pasteSeq}.${ext}`, { type: blob.type || 'image/png', lastModified: Date.now() }));
+    }
+    if (!files.length) {
+      for (const file of Array.from(clipboard.files || [])) if (file.type.startsWith('image/')) files.push(file);
+    }
+    return files;
+  }
+
+  async function handlePaste(event) {
+    const el = event.target;
+    if (el?.matches?.('input:not([type="range"]), textarea, [contenteditable="true"]')) return;
+    const files = pastedImageFiles(event);
+    if (!files.length) return;
+    event.preventDefault();
+    const destination = state.pasteDestination;
+    if (destination === 'reference') await loadReferenceFiles(files);
+    else await loadTargetFiles(files);
+    refs.pasteHelper.classList.remove('paste-ready');
+    refs.pasteHelper.classList.add('paste-success');
+    refs.pasteDestinationLabel.textContent = destination === 'reference' ? 'References — pasted' : 'Targets — pasted';
+    setTimeout(() => {
+      refs.pasteHelper.classList.remove('paste-success');
+      refs.pasteDestinationLabel.textContent = state.pasteDestination === 'reference' ? 'References' : 'Targets';
+    }, 1600);
+  }
+
+  function initHsl() {
+    refs.hslMixer.innerHTML = HSL_BANDS.map(([name, h]) => `<div class="hsl-row"><div class="hsl-name"><span class="swatch" style="--h:${h}"></span>${name}</div>${['h','s','l'].map(k => `<div class="hsl-control"><input type="range" data-band="${name}" data-kind="${k}" min="${k === 'h' ? -30 : -50}" max="${k === 'h' ? 30 : 50}" value="0"><output>0</output></div>`).join('')}</div>`).join('');
+    refs.hslMixer.querySelectorAll('input').forEach(el => el.addEventListener('input', () => { state.hsl[el.dataset.band][el.dataset.kind] = +el.value; el.nextElementSibling.value = el.value; scheduleProcess(); }));
+  }
+
+  function drawCurve() {
+    const c = refs.curveCanvas, ctx = c.getContext('2d'), w = c.width, h = c.height, pad = 18, iw = w - pad * 2, ih = h - pad * 2;
+    ctx.clearRect(0, 0, w, h); ctx.fillStyle = '#10100e'; ctx.fillRect(0, 0, w, h); ctx.strokeStyle = '#292923'; ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) { const x = pad + iw * i / 4, y = pad + ih * i / 4; ctx.beginPath(); ctx.moveTo(x, pad); ctx.lineTo(x, h - pad); ctx.stroke(); ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(w - pad, y); ctx.stroke(); }
+    const ys = state.curves[state.activeCurve], stroke = state.activeCurve === 'r' ? '#e78383' : state.activeCurve === 'g' ? '#83d99a' : state.activeCurve === 'b' ? '#86a9ee' : '#d8f077';
+    ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.beginPath();
+    for (let i = 0; i <= 128; i++) { const xNorm = i / 128, yNorm = evalCurve(xNorm, ys), x = pad + xNorm * iw, y = pad + (1 - yNorm) * ih; i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+    ctx.stroke();
+    for (let i = 0; i < 5; i++) { const x = pad + curveXs[i] * iw, y = pad + (1 - ys[i]) * ih; ctx.fillStyle = '#11110f'; ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, i === 0 || i === 4 ? 4 : 6, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
+  }
+
+  function curvePointFromEvent(e) {
+    const rect = refs.curveCanvas.getBoundingClientRect(), sx = refs.curveCanvas.width / rect.width, sy = refs.curveCanvas.height / rect.height, pad = 18, iw = refs.curveCanvas.width - pad * 2, ih = refs.curveCanvas.height - pad * 2;
+    const x = (e.clientX - rect.left) * sx, y = (e.clientY - rect.top) * sy, ys = state.curves[state.activeCurve]; let best = -1, dist = 1e9;
+    for (let i = 1; i < 4; i++) { const px = pad + curveXs[i] * iw, py = pad + (1 - ys[i]) * ih, d = Math.hypot(x - px, y - py); if (d < dist) { dist = d; best = i; } }
+    return { best, dist, yNorm: clamp01(1 - (y - pad) / ih) };
+  }
+
+  function updateCurveDrag(e) {
+    if (state.dragPoint < 1) return;
+    const rect = refs.curveCanvas.getBoundingClientRect(), sy = refs.curveCanvas.height / rect.height, pad = 18, ih = refs.curveCanvas.height - pad * 2, y = (e.clientY - rect.top) * sy;
+    const ys = state.curves[state.activeCurve], i = state.dragPoint, min = ys[i - 1] + .01, max = ys[i + 1] - .01; ys[i] = clamp(1 - (y - pad) / ih, min, max); drawCurve(); scheduleProcess();
+  }
+
+  function resetCurves() { state.curves = { master: defaultCurve(), r: defaultCurve(), g: defaultCurve(), b: defaultCurve() }; drawCurve(); }
+  function resetHsl() {
+    for (const [name] of HSL_BANDS) state.hsl[name] = { h: 0, s: 0, l: 0 };
+    refs.hslMixer.querySelectorAll('input').forEach(el => { el.value = 0; el.nextElementSibling.value = 0; });
+  }
+  function syncHslUI() { refs.hslMixer.querySelectorAll('input').forEach(el => { const v = state.hsl?.[el.dataset.band]?.[el.dataset.kind] ?? 0; el.value = v; el.nextElementSibling.value = v; }); }
+
+  function resetSharedEdits() {
+    const defs = { ...FINISH_PRESETS.natural, exposure: 0, contrast: 0, shadows: 0, highlights: 0, warmth: 0, tint: 0, saturation: 0, grain: 0 };
+    delete defs.label;
+    for (const [id, v] of Object.entries(defs)) controls[id].value = v;
+    state.finishPreset = 'natural'; document.querySelectorAll('.finish-preset').forEach(button => button.classList.toggle('active', button.dataset.preset === 'natural')); refs.finishPresetLabel.textContent = FINISH_PRESETS.natural.label;
+    resetCurves(); resetHsl(); updateOutputs(); drawPreview();
+  }
+
+  let picaResizer = null;
+  function outputCanvasLimit() { return matchMedia('(max-width: 720px), (pointer: coarse)').matches ? 40000000 : 100000000; }
+  function validateUpscaleSize(w, h) {
+    const outW = w * 2, outH = h * 2, pixels = outW * outH;
+    if (outW > 16384 || outH > 16384 || pixels > outputCanvasLimit()) {
+      throw new Error(`2x Upscale would create a ${outW.toLocaleString()} × ${outH.toLocaleString()} image, which is too large for this browser. Turn off 2x Upscale and export at the original resolution.`);
+    }
+  }
+  function canvasBlob(canvas, type, quality) {
+    return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Image export failed.')), type, quality));
+  }
+
+  async function renderFullTargetCanvas(target, upscale = false, onProgress = null) {
+    const w = target.img.naturalWidth, h = target.img.naturalHeight, c = document.createElement('canvas'); c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(target.img, 0, 0, w, h);
+    const data = ctx.getImageData(0, 0, w, h); processPixels(data, w, h, target.stats, state.referenceStats, getParams(target)); ctx.putImageData(data, 0, 0);
+    if (!upscale) return c;
+    if (!window.AIUpscaler) throw new Error('AI Super-Resolution engine not loaded. Please reload the page.');
+    const out = await window.AIUpscaler.upscaleCanvas(c, onProgress);
+    c.width = 1; c.height = 1;
+    return out;
+  }
+
+  function exportDepthAnythingEnabled() { return !!refs.exportDepthAnythingToggle?.checked; }
+
+  function generateHeuristicDepthPreviewMap(sourceCanvas) {
+    const w = sourceCanvas.width, h = sourceCanvas.height, c = document.createElement('canvas'); c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(sourceCanvas, 0, 0);
+    const img = ctx.getImageData(0, 0, w, h), d = img.data;
+    const luma = new Float32Array(w * h), depth = new Float32Array(w * h);
+    for (let i = 0, p = 0; i < d.length; i += 4, p++) luma[p] = .299 * d[i] + .587 * d[i + 1] + .114 * d[i + 2];
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const p = y * w + x, centerBias = 1 - Math.min(1, Math.hypot((x / Math.max(1, w - 1)) - .5, (y / Math.max(1, h - 1)) - .5) * 1.55);
+      const verticalPrior = 1 - y / Math.max(1, h - 1);
+      depth[p] = clamp(luma[p] * .5 + verticalPrior * 82 + centerBias * 48);
+    }
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+      const p = y * w + x, i = p * 4;
+      const smooth = (depth[p] * 4 + depth[p - 1] * 2 + depth[p + 1] * 2 + depth[p - w] * 2 + depth[p + w] * 2 + depth[p - w - 1] + depth[p - w + 1] + depth[p + w - 1] + depth[p + w + 1]) / 16;
+      const v = clamp(smooth); d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0); return c;
+  }
+
+  async function requestDepthAnythingV2Map(sourceCanvas) {
+    const sourceBlob = await canvasBlob(sourceCanvas, 'image/png');
+    const formData = new FormData();
+    formData.append('image', sourceBlob, 'source.png');
+    const response = await fetch('/api/depth-anything-v2', { method: 'POST', body: formData });
+    if (!response.ok) throw new Error('Depth Anything V2 backend is unavailable.');
+    return response.blob();
+  }
+
+  async function exportDepthAnythingMaps(sourceCanvas, baseName, addFile) {
+    try {
+      const depthBlob = sourceCanvas[state.depthAnythingCacheKey] || (sourceCanvas[state.depthAnythingCacheKey] = await requestDepthAnythingV2Map(sourceCanvas));
+      await addFile(`${baseName}_depth_anything_v2.png`, depthBlob);
+    } catch (error) {
+      const fallback = sourceCanvas[state.heuristicDepthCacheKey] || (sourceCanvas[state.heuristicDepthCacheKey] = generateHeuristicDepthPreviewMap(sourceCanvas));
+      const depthBlob = await canvasBlob(fallback, 'image/png');
+      await addFile(`${baseName}_heuristic_depth_proxy.png`, depthBlob);
+      console.warn(error);
+    }
+  }
+
+  async function updateDepthExportAvailabilityLabel() {
+    if (!refs.exportDepthAnythingLabel) return;
+    try {
+      const response = await fetch('/api/depth-anything-v2', { method: 'GET', cache: 'no-store' });
+      const status = response.ok ? await response.json() : null;
+      refs.exportDepthAnythingLabel.textContent = status?.available ? 'Export Depth Anything V2' : 'Export heuristic depth proxy';
+    } catch {
+      refs.exportDepthAnythingLabel.textContent = 'Export heuristic depth proxy';
+    }
+  }
+
+  async function exportCurrent(type, quality = 1) {
+    const target = activeTarget(); if (!target || !state.referenceStats) return;
+    const btn = type === 'image/png' ? refs.exportBtn : refs.exportJpgBtn, old = btn.textContent; btn.disabled = true; btn.textContent = 'Processing…';
+    const upscale = refs.upscale2x.checked;
+    if (upscale) {
+      refs.batchProgress.classList.remove('hidden');
+      refs.batchProgressBar.style.width = '0%';
+      refs.batchProgressText.textContent = 'Initializing AI Super-Resolution…';
+    }
+    try {
+      await new Promise(r => setTimeout(r, 20));
+      const canvas = await renderFullTargetCanvas(target, upscale, (pct, text) => {
+        if (upscale) {
+          refs.batchProgressBar.style.width = `${pct}%`;
+          refs.batchProgressText.textContent = text;
+        }
+      });
+      const blob = await canvasBlob(canvas, type, quality);
+      const ext = type === 'image/png' ? 'png' : 'jpg', suffix = upscale ? '_4x_ai' : '', baseName = `${cleanBaseName(target.name)}_colour-match-v5${suffix}`;
+      downloadBlob(blob, `${baseName}.${ext}`);
+      if (exportDepthAnythingEnabled()) await exportDepthAnythingMaps(canvas, baseName, (name, mapBlob) => downloadBlob(mapBlob, name));
+      canvas.width = 1; canvas.height = 1;
+    } catch (err) { alert(err.message); }
+    finally {
+      btn.disabled = false; btn.textContent = old;
+      if (upscale) setTimeout(() => refs.batchProgress.classList.add('hidden'), 2200);
+    }
+  }
+
+  function exportLut() {
+    const target = activeTarget(); if (!state.referenceStats || !target) return;
+    const size = 32, params = { ...getParams(target), grain: 0, detail: 0 }, luts = { master: curveLUT(state.curves.master), r: curveLUT(state.curves.r), g: curveLUT(state.curves.g), b: curveLUT(state.curves.b) };
+    let out = `TITLE "Colour Match v5 — ${cleanBaseName(target.name)}"\nLUT_3D_SIZE ${size}\nDOMAIN_MIN 0.0 0.0 0.0\nDOMAIN_MAX 1.0 1.0 1.0\n`;
+    for (let bz = 0; bz < size; bz++) for (let gy = 0; gy < size; gy++) for (let rx = 0; rx < size; rx++) {
+      const r = rx / (size - 1) * 255, g = gy / (size - 1) * 255, b = bz / (size - 1) * 255;
+      const [R, G, B] = transformRGB(r, g, b, target.stats, state.referenceStats, params, luts, 0, .5, .5); out += `${(R / 255).toFixed(6)} ${(G / 255).toFixed(6)} ${(B / 255).toFixed(6)}\n`;
+    }
+    downloadBlob(new Blob([out], { type: 'text/plain' }), `${cleanBaseName(target.name)}_colour-match-v5.cube`);
+    refs.resultNote.textContent = 'LUT exported for the active target. Local depth, texture and grain are excluded because a 3D LUT cannot encode spatial adjustments.';
+  }
+
+  function serializeStats(s) {
+    const copy = cloneDeep({ ...s, hist: undefined }); delete copy.hist; return copy;
+  }
+
+  function saveProfile() {
+    if (!state.referenceStats) return;
+    const profile = {
+      version: 5, app: 'Colour Match', createdAt: new Date().toISOString(), finishPreset: state.finishPreset,
+      referenceStats: serializeStats(state.referenceStats),
+      controls: Object.fromEntries(sharedControlIds.map(id => [id, +controls[id].value])),
+      descriptor: descriptor(state.referenceStats), curves: state.curves, hsl: state.hsl,
+      notes: { multiReferenceMedianProfile: true, adaptiveToneEqualizer: true, detailMatch: true, threeWayResidualTransfer: true, automaticEditorialFinish: true, referenceColourDensity: true, highlightRolloff: true, localDepth: true }
+    };
+    downloadBlob(new Blob([JSON.stringify(profile, null, 2)], { type: 'application/json' }), 'colour-match-v5-profile.json');
+  }
+
+  async function loadProfile() {
+    const file = refs.loadProfileInput.files?.[0]; if (!file) return;
+    try {
+      const p = JSON.parse(await file.text()); if (!p.referenceStats) throw new Error('Invalid Colour Match profile.');
+      for (const r of state.references) if (r.url) URL.revokeObjectURL(r.url); state.references = []; state.referenceStats = hydrateStats(p.referenceStats); state.loadedProfile = p;
+      const defaults = FINISH_PRESETS.natural; for (const [id,v] of Object.entries(defaults)) if (controls[id]) controls[id].value = v;
+      if (p.controls) for (const [id, v] of Object.entries(p.controls)) if (controls[id]) controls[id].value = v;
+      state.finishPreset = FINISH_PRESETS[p.finishPreset] ? p.finishPreset : 'natural'; document.querySelectorAll('.finish-preset').forEach(button => button.classList.toggle('active', button.dataset.preset === state.finishPreset)); refs.finishPresetLabel.textContent = FINISH_PRESETS[state.finishPreset].label;
+      if (p.curves) state.curves = p.curves; if (p.hsl) state.hsl = p.hsl;
+      updateOutputs(); syncHslUI(); renderReferenceStack(); renderReferenceAnalysis(state.referenceStats); drawCurve(); refs.loadProfileInput.value = '';
+      for (const t of state.targets) { t.correction = defaultCorrection(); t.tuned = false; } renderTargetStrip(); showWorkspaceIfReady(true);
+    } catch (err) { alert(err.message || 'That file does not look like a Colour Match profile.'); }
+  }
+
+  function downloadBlob(blob, filename) {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+  }
+
+  const crcTable = (() => {
+    const table = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? 0xedb88320 ^ (c >>> 1) : c >>> 1; table[n] = c >>> 0; }
+    return table;
+  })();
+  function crc32(bytes) { let c = 0xffffffff; for (let i = 0; i < bytes.length; i++) c = crcTable[(c ^ bytes[i]) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; }
+  function dosDateTime(date = new Date()) {
+    const year = Math.max(1980, date.getFullYear()), dosTime = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2), dosDate = ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
+    return { dosTime, dosDate };
+  }
+  function writeU16(view, offset, value) { view.setUint16(offset, value, true); }
+  function writeU32(view, offset, value) { view.setUint32(offset, value >>> 0, true); }
+
+  function buildZip(files) {
+    const encoder = new TextEncoder(), { dosTime, dosDate } = dosDateTime(), locals = [], centrals = [];
+    let offset = 0, centralSize = 0;
+    for (const file of files) {
+      const name = encoder.encode(file.name), data = file.data, crc = crc32(data), local = new Uint8Array(30 + name.length + data.length), lv = new DataView(local.buffer);
+      writeU32(lv, 0, 0x04034b50); writeU16(lv, 4, 20); writeU16(lv, 6, 0); writeU16(lv, 8, 0); writeU16(lv, 10, dosTime); writeU16(lv, 12, dosDate); writeU32(lv, 14, crc); writeU32(lv, 18, data.length); writeU32(lv, 22, data.length); writeU16(lv, 26, name.length); writeU16(lv, 28, 0); local.set(name, 30); local.set(data, 30 + name.length); locals.push(local);
+      const central = new Uint8Array(46 + name.length), cv = new DataView(central.buffer);
+      writeU32(cv, 0, 0x02014b50); writeU16(cv, 4, 20); writeU16(cv, 6, 20); writeU16(cv, 8, 0); writeU16(cv, 10, 0); writeU16(cv, 12, dosTime); writeU16(cv, 14, dosDate); writeU32(cv, 16, crc); writeU32(cv, 20, data.length); writeU32(cv, 24, data.length); writeU16(cv, 28, name.length); writeU16(cv, 30, 0); writeU16(cv, 32, 0); writeU16(cv, 34, 0); writeU16(cv, 36, 0); writeU32(cv, 38, 0); writeU32(cv, 42, offset); central.set(name, 46); centrals.push(central);
+      offset += local.length; centralSize += central.length;
+    }
+    const end = new Uint8Array(22), ev = new DataView(end.buffer); writeU32(ev, 0, 0x06054b50); writeU16(ev, 4, 0); writeU16(ev, 6, 0); writeU16(ev, 8, files.length); writeU16(ev, 10, files.length); writeU32(ev, 12, centralSize); writeU32(ev, 16, offset); writeU16(ev, 20, 0);
+    return new Blob([...locals, ...centrals, end], { type: 'application/zip' });
+  }
+
+  async function exportAllZip() {
+    if (!state.referenceStats || !state.targets.length) return;
+    const type = refs.batchFormat.value, ext = type === 'image/png' ? 'png' : 'jpg', quality = type === 'image/jpeg' ? .94 : 1, upscale = refs.upscale2x.checked;
+    const old = refs.exportAllBtn.textContent; refs.exportAllBtn.disabled = true; refs.exportAllBtn.textContent = 'Processing…'; refs.batchProgress.classList.remove('hidden');
+    const files = [], usedNames = new Map(), errors = [];
+    try {
+      for (let i = 0; i < state.targets.length; i++) {
+        const target = state.targets[i];
+        try {
+        if (!upscale) {
+          const pct = Math.round(i / state.targets.length * 100);
+          refs.batchProgressBar.style.width = `${pct}%`;
+          refs.batchProgressText.textContent = `Processing ${i + 1} of ${state.targets.length}: ${target.name}`;
+        }
+        await new Promise(r => setTimeout(r, 16));
+        const canvas = await renderFullTargetCanvas(target, upscale, (pct, text) => {
+          if (upscale) {
+            const overallPct = Math.round(((i + pct / 100) / state.targets.length) * 100);
+            refs.batchProgressBar.style.width = `${overallPct}%`;
+            refs.batchProgressText.textContent = `Target ${i + 1}/${state.targets.length}: ${text}`;
+          }
+        });
+        const blob = await canvasBlob(canvas, type, quality);
+        const data = new Uint8Array(await blob.arrayBuffer());
+        const base = cleanBaseName(target.name); const count = (usedNames.get(base) || 0) + 1; usedNames.set(base, count); const suffix = count > 1 ? `-${count}` : '';
+        const outputBase = `${base}${suffix}_colour-match-v5${upscale ? '_4x_ai' : ''}`;
+        files.push({ name: `${outputBase}.${ext}`, data });
+        if (exportDepthAnythingEnabled()) await exportDepthAnythingMaps(canvas, outputBase, async (name, mapBlob) => files.push({ name, data: new Uint8Array(await mapBlob.arrayBuffer()) }));
+        canvas.width = 1; canvas.height = 1;
+        } catch (err) {
+          console.error('Batch target export failed:', target.name, err);
+          errors.push(`${target.name}: ${err.message || err}`);
+          refs.batchProgressText.textContent = `Skipped ${target.name}: ${err.message || err}`;
+        }
+      }
+      if (!files.length) throw new Error(errors.length ? `No files exported. ${errors.join('; ')}` : 'No files exported.');
+      refs.batchProgressBar.style.width = '100%'; refs.batchProgressText.textContent = 'Packaging ZIP…'; await new Promise(r => setTimeout(r, 20));
+      downloadBlob(buildZip(files), `colour-match-v5-${state.targets.length}-targets${upscale ? '-4x-ai' : ''}.zip`); refs.batchProgressText.textContent = errors.length ? `Done with ${errors.length} warning(s) • ${files.length} files in ZIP` : `Done • ${files.length} files in ZIP`; if (errors.length) console.warn('Batch export warnings:', errors);
+    } catch (err) { alert(`Batch export failed: ${err.message}`); }
+    finally { refs.exportAllBtn.disabled = false; refs.exportAllBtn.textContent = old; setTimeout(() => refs.batchProgress.classList.add('hidden'), 2200); }
+  }
+
+  function setPreviewMode(mode) {
+    state.mode = mode;
+    document.querySelectorAll('.seg').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+    if (mode === 'split') { refs.afterLayer.style.width = '100%'; refs.afterLayer.style.clipPath = `inset(0 0 0 ${refs.splitSlider.value}%)`; refs.afterLayer.style.display = 'grid'; refs.splitLine.style.display = 'block'; refs.splitSlider.style.display = 'block'; document.querySelector('.before-badge').style.display = 'block'; document.querySelector('.after-badge').style.display = 'block'; }
+    else if (mode === 'before') { refs.afterLayer.style.display = 'none'; refs.splitLine.style.display = 'none'; refs.splitSlider.style.display = 'none'; document.querySelector('.after-badge').style.display = 'none'; document.querySelector('.before-badge').style.display = 'block'; }
+    else { refs.afterLayer.style.display = 'grid'; refs.afterLayer.style.width = '100%'; refs.afterLayer.style.clipPath = 'none'; refs.splitLine.style.display = 'none'; refs.splitSlider.style.display = 'none'; document.querySelector('.before-badge').style.display = 'none'; document.querySelector('.after-badge').style.display = 'block'; }
+  }
+
+  if (refs.exportDepthAnythingToggle) refs.exportDepthAnythingToggle.checked = sessionStorage.getItem('exportDepthAnythingV2') === 'true';
+  updateDepthExportAvailabilityLabel();
   bindDrop(refs.referenceDrop, refs.referenceInput, 'reference'); bindDrop(refs.targetDrop, refs.targetInput, 'target'); setPasteDestination('reference', false); initHsl(); applyFinishPreset('natural', false); drawCurve(); renderReferenceStack();
   document.querySelectorAll('.finish-preset').forEach(button => button.addEventListener('click', () => applyFinishPreset(button.dataset.preset)));
   sharedControlIds.forEach(id => controls[id].addEventListener('input', () => { updateOutputs(); scheduleProcess(); }));
@@ -1235,13 +1707,13 @@
       active3DViewer.controls.reset();
     }
   });
-
   refs.mobileAutoTuneBtn.addEventListener('click', autoTuneCurrent); refs.mobileAutoTuneAllBtn.addEventListener('click', autoTuneAll);
   refs.resetBtn.addEventListener('click', resetSharedEdits); refs.resetCurrentBtn.addEventListener('click', resetCurrentCorrection);
   if (refs.newTargetBtn) refs.newTargetBtn.addEventListener('click', () => refs.targetInput.click()); if (refs.addTargetsBtn) refs.addTargetsBtn.addEventListener('click', () => refs.targetInput.click()); if (refs.newReferenceBtn) refs.newReferenceBtn.addEventListener('click', () => refs.referenceInput.click()); if (refs.addReferencesBtn) refs.addReferencesBtn.addEventListener('click', () => refs.referenceInput.click()); if (refs.clearReferencesBtn) refs.clearReferencesBtn.addEventListener('click', clearReferences);
   refs.prevTargetBtn.addEventListener('click', () => selectRelative(-1)); refs.nextTargetBtn.addEventListener('click', () => selectRelative(1));
   refs.exportBtn.addEventListener('click', () => exportCurrent('image/png')); refs.exportJpgBtn.addEventListener('click', () => exportCurrent('image/jpeg', .94)); refs.exportAllBtn.addEventListener('click', exportAllZip); refs.exportLutBtn.addEventListener('click', exportLut);
   refs.upscale2x.addEventListener('change', () => { if (activeTarget() && state.referenceStats) drawPreview(); });
+  refs.exportDepthAnythingToggle?.addEventListener('change', () => sessionStorage.setItem('exportDepthAnythingV2', refs.exportDepthAnythingToggle.checked ? 'true' : 'false'));
   const blueCastToggles = document.querySelectorAll('.blue-cast-toggle, #blueCastToggleSidebar, #blueCastToggleExport, #blueCastToggle');
   blueCastToggles.forEach(toggle => {
     toggle.addEventListener('change', e => {
@@ -1277,4 +1749,3 @@
   document.addEventListener('paste', handlePaste);
   loadDefaultReferences();
 })();
-

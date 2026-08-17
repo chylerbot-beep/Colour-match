@@ -1226,39 +1226,11 @@ const ColorEngine = {
 if (typeof window !== 'undefined') {
   window.ColorEngine = ColorEngine;
 }
+if (typeof globalThis !== 'undefined') {
+  globalThis.ColorEngine = ColorEngine;
+}
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = ColorEngine;
+}
 
-export default ColorEngine;
-export {
-  rgbToXyz,
-  xyzToRgb,
-  xyzToLab,
-  labToXyz,
-  rgbToLab,
-  labToRgb,
-  labToLch,
-  lchToLab,
-  rgbToLch,
-  lchToRgb,
-  circularHueDelta,
-  circularDistance,
-  deltaE2000,
-  computeFastSSIM,
-  computeEdgePreservationScore,
-  MATERIAL_KEYS,
-  MATERIAL_LABELS,
-  computeEdgeMap,
-  computeEdgeSafetyMap,
-  boxBlurMask,
-  classifyPixelMaterial,
-  extractMaterialProfiles,
-  aggregateMaterialProfiles,
-  estimateIlluminationField,
-  interpolateIllumination,
-  applyIlluminationCorrection,
-  transferLocalMaterialColor,
-  evaluateCompositeScore,
-  optimizeParameters,
-  computeDepthGradients,
-  applyDepthTonalGrading
-};
 
