@@ -26,7 +26,7 @@
 .tone-chip.lift strong{color:#d8f077}.tone-chip.lower strong{color:#e0b39b}
 @media(max-width:620px){.tone-eq{grid-template-columns:repeat(5,minmax(52px,1fr));overflow-x:auto;padding-bottom:2px}.tone-chip span{font-size:7px}}
 
-/* V6 Quality Upgrade: Material ROI styling */
+/* V6 Quality Upgrade: Material ROIs & Objective Score styling */
 .material-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .material-chip{display:inline-flex;align-items:center;gap:5px;padding:5px 9px;border-radius:8px;background:#1b1b17;border:1px solid #2e2e28;font-size:10px;color:#d7d4c8}
 .material-chip .mat-dot{width:7px;height:7px;border-radius:50%;background:var(--accent)}
@@ -35,3 +35,10 @@
 .material-chip.mid-conf .mat-dot{background:#9ab848}
 .material-chip.low-conf{opacity:.65}
 .material-chip.low-conf .mat-dot{background:#65645d}
+
+.score-card{background:linear-gradient(180deg,#191915,#131310);border-color:#38382e}
+.score-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:8px 0}
+.score-item{padding:7px 5px;border-radius:8px;background:#1b1b17;border:1px solid #2c2c26;text-align:center}
+.score-val{display:block;font-size:13px;font-weight:700;color:#d8f077;font-variant-numeric:tabular-nums}
+.score-lbl{display:block;margin-top:3px;font-size:8px;color:#88867c;text-transform:uppercase;letter-spacing:.04em}
+

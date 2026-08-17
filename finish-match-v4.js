@@ -73,7 +73,13 @@
     localStrength: $('localStrength'),
     illuminationStrength: $('illuminationStrength'),
     edgeSafetyStrength: $('edgeSafetyStrength'),
-    targetMaterialChips: $('targetMaterialChips')
+    targetMaterialChips: $('targetMaterialChips'),
+    objectiveScoreSummary: $('objectiveScoreSummary'),
+    scoreOverall: $('scoreOverall'),
+    scoreColor: $('scoreColor'),
+    scoreStructure: $('scoreStructure'),
+    scoreEdge: $('scoreEdge'),
+    optimizeMatchBtn: $('optimizeMatchBtn')
   };
 
   const sharedControlIds = [
@@ -503,6 +509,25 @@
       }
     }
 
+    // V6 Objective ΔE00 / SSIM Score Card
+    const metrics = target.optimizationMetrics;
+    if (metrics && refs.scoreOverall) {
+      refs.scoreOverall.textContent = `${metrics.overallScore}`;
+      refs.scoreColor.textContent = `${metrics.colorScore}%`;
+      refs.scoreStructure.textContent = `${metrics.structureScore}%`;
+      refs.scoreEdge.textContent = `${metrics.edgeScore}%`;
+      if (refs.objectiveScoreSummary) {
+        refs.objectiveScoreSummary.textContent = `Avg ΔE: ${metrics.avgDeltaE} • Evaluated`;
+      }
+    } else if (refs.scoreOverall) {
+      refs.scoreOverall.textContent = '—';
+      refs.scoreColor.textContent = '—';
+      refs.scoreStructure.textContent = '—';
+      refs.scoreEdge.textContent = '—';
+      if (refs.objectiveScoreSummary) {
+        refs.objectiveScoreSummary.textContent = 'Click to evaluate & optimize';
+      }
+    }
   }
 
   function drawHistogramUnavailable(canvas, text) {
@@ -1002,6 +1027,59 @@
     target.tuned = true;
   }
 
+  function optimizeTarget(target) {
+    if (!target || !state.referenceStats) return;
+    const engine = (typeof ColorEngine !== 'undefined' ? ColorEngine : (typeof window !== 'undefined' ? window.ColorEngine : null));
+    if (!engine) return;
+
+    // Fast thumbnail render for coordinate search
+    const tw = 240, th = Math.max(2, Math.round(target.img.naturalHeight * (240 / target.img.naturalWidth)));
+    const origC = document.createElement('canvas'); origC.width = tw; origC.height = th;
+    const origCtx = origC.getContext('2d', { willReadFrequently: true });
+    origCtx.drawImage(target.img, 0, 0, tw, th);
+    const origData = origCtx.getImageData(0, 0, tw, th);
+
+    const renderThumbnail = (candidateParams, rw, rh) => {
+      const c = document.createElement('canvas'); c.width = rw; c.height = rh;
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(target.img, 0, 0, rw, rh);
+      const imgData = ctx.getImageData(0, 0, rw, rh);
+      const fullParams = { ...getParams(target), ...candidateParams };
+      processPixels(imgData, rw, rh, target.stats, state.referenceStats, fullParams);
+      return { original: origData, rendered: imgData };
+    };
+
+    const initialParams = {
+      localStrength: +controls.localStrength.value / 100,
+      tone: +controls.toneStrength.value / 100,
+      color: +controls.colorStrength.value / 100,
+      illumination: +controls.illuminationStrength.value / 100,
+      neutralProtect: +controls.neutralProtect.value / 100
+    };
+
+    const optRes = engine.optimizeParameters(
+      renderThumbnail,
+      initialParams,
+      target.stats,
+      state.referenceStats,
+      tw,
+      th,
+      8
+    );
+
+    // Apply optimized values
+    controls.localStrength.value = Math.round(optRes.optimizedParams.localStrength * 100);
+    controls.toneStrength.value = Math.round(optRes.optimizedParams.tone * 100);
+    controls.colorStrength.value = Math.round(optRes.optimizedParams.color * 100);
+    controls.illuminationStrength.value = Math.round(optRes.optimizedParams.illumination * 100);
+    controls.neutralProtect.value = Math.round(optRes.optimizedParams.neutralProtect * 100);
+    updateOutputs();
+
+    target.optimizationMetrics = optRes.finalScore;
+    target.tuned = true;
+    drawPreview();
+  }
+
   function autoTuneCurrent() {
     const t = activeTarget(); if (!t) return; autoTuneTarget(t);
     syncTrimControls(); renderTargetStrip(); drawPreview();
@@ -1450,6 +1528,7 @@
   refs.curveCanvas.addEventListener('pointerdown', e => { const p = curvePointFromEvent(e); if (p.dist < 34) { state.dragPoint = p.best; refs.curveCanvas.setPointerCapture(e.pointerId); updateCurveDrag(e); } });
   refs.curveCanvas.addEventListener('pointermove', e => { if (state.dragPoint >= 1) updateCurveDrag(e); }); refs.curveCanvas.addEventListener('pointerup', () => { state.dragPoint = -1; }); refs.curveCanvas.addEventListener('pointercancel', () => { state.dragPoint = -1; });
   refs.resetCurveBtn.addEventListener('click', () => { resetCurves(); scheduleProcess(); }); refs.autoTuneBtn.addEventListener('click', autoTuneCurrent); refs.autoTuneAllBtn.addEventListener('click', autoTuneAll);
+  refs.optimizeMatchBtn?.addEventListener('click', () => { const t = activeTarget(); if (t) optimizeTarget(t); });
   refs.mobileAutoTuneBtn.addEventListener('click', autoTuneCurrent); refs.mobileAutoTuneAllBtn.addEventListener('click', autoTuneAll);
   refs.resetBtn.addEventListener('click', resetSharedEdits); refs.resetCurrentBtn.addEventListener('click', resetCurrentCorrection);
   if (refs.newTargetBtn) refs.newTargetBtn.addEventListener('click', () => refs.targetInput.click()); if (refs.addTargetsBtn) refs.addTargetsBtn.addEventListener('click', () => refs.targetInput.click()); if (refs.newReferenceBtn) refs.newReferenceBtn.addEventListener('click', () => refs.referenceInput.click()); if (refs.addReferencesBtn) refs.addReferencesBtn.addEventListener('click', () => refs.referenceInput.click()); if (refs.clearReferencesBtn) refs.clearReferencesBtn.addEventListener('click', clearReferences);

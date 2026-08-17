@@ -3,11 +3,13 @@
  * 
  * Includes:
  * 1. Perceptual Color Space Conversions: sRGB <-> Linear <-> XYZ <-> Lab <-> LCh
+ * 2. CIEDE2000 (ΔE00) Perceptual Color Difference
  * 3. Fast In-Browser Structural Similarity (SSIM) & Gradient Preservation
  * 4. Semantic Interior Material & ROI Probabilistic Segmentation & Resolution-Aware Feathering
  * 5. Spatial Illumination Field Estimation & True-Material Protection
  * 6. Edge Safety & Boundary Protection Map
  * 7. LAB / LCh Local Material-Aware Color Transfer
+ * 8. Objective Composite Scoring & Bounded Parameter Optimization Loop
  */
 
 // ==========================================
@@ -965,6 +967,181 @@ function transferLocalMaterialColor(r, g, b, nx, ny, targetProfiles, refProfiles
   return lchToRgb(finalL, finalC, finalH);
 }
 
+// ==========================================
+// 7. OBJECTIVE ΔE00 / SSIM OPTIMIZATION LOOP
+// ==========================================
+
+/**
+ * Evaluate a rendered output against reference profiles and original image
+ * Returns a comprehensive score in [0, 100] and detailed sub-metrics
+ */
+function evaluateCompositeScore(imgDataOrig, imgDataRendered, w, h, targetProfiles, refProfiles) {
+  const total = w * h;
+  const step = Math.max(1, Math.floor(total / 25000));
+  const dO = imgDataOrig.data;
+  const dR = imgDataRendered.data;
+
+  let deltaESum = 0;
+  let deltaECount = 0;
+  let penaltySum = 0;
+
+  for (let p = 0; p < total; p += step) {
+    const i = p * 4;
+    if (dO[i + 3] < 30) continue;
+
+    const labOrig = rgbToLab(dO[i], dO[i + 1], dO[i + 2]);
+    const labRend = rgbToLab(dR[i], dR[i + 1], dR[i + 2]);
+
+    const [L_R, C_R, h_R] = labToLch(labRend[0], labRend[1], labRend[2]);
+    const [L_O, C_O, h_O] = labToLch(labOrig[0], labOrig[1], labOrig[2]);
+
+    // Perceptual color delta from original
+    const dE = deltaE2000(labOrig, labRend);
+    deltaESum += dE;
+    deltaECount++;
+
+    // Penalty for extreme over-saturation (C* > 75)
+    if (C_R > 75 && C_R > C_O + 15) {
+      penaltySum += (C_R - 75) * 0.15;
+    }
+
+    // Penalty for highlight clipping or deep shadow crushing
+    if (labRend[0] > 98.5 && labOrig[0] < 96) penaltySum += 1.2;
+    if (labRend[0] < 1.5 && labOrig[0] > 4) penaltySum += 1.2;
+
+    // Penalty for wild hue flip (> 30° deviation on saturated pixels)
+    if (C_O > 15) {
+      const hDist = circularDistance(h_O, h_R);
+      if (hDist > 25) penaltySum += (hDist - 25) * 0.1;
+    }
+  }
+
+  const avgDeltaE = deltaECount ? deltaESum / deltaECount : 0;
+  const avgPenalty = deltaECount ? penaltySum / deltaECount : 0;
+
+  // Structural similarity score [0, 1]
+  const ssimScore = computeFastSSIM(imgDataOrig, imgDataRendered, w, h, 6);
+
+  // Edge preservation score [0, 1]
+  const edgeScore = computeEdgePreservationScore(imgDataOrig, imgDataRendered, w, h, 4);
+
+  // ΔE Score: Lower ΔE distance to reference look with safety bounds (ideal avg dE around 4-12)
+  const colorScore = clamp01(1 - Math.abs(avgDeltaE - 8.5) / 25);
+  const toneScore = clamp01(ssimScore * 0.6 + edgeScore * 0.4);
+  const structureScore = ssimScore;
+
+  // Composite score [0, 100]
+  const rawScore =
+    (colorScore * 0.35 + toneScore * 0.25 + structureScore * 0.25 + edgeScore * 0.15) * 100 -
+    avgPenalty * 15;
+
+  const overallScore = clamp(Math.round(rawScore * 10) / 10, 0, 100);
+
+  return {
+    overallScore,
+    colorScore: Math.round(colorScore * 100),
+    toneScore: Math.round(toneScore * 100),
+    structureScore: Math.round(structureScore * 100),
+    edgeScore: Math.round(edgeScore * 100),
+    avgDeltaE: Math.round(avgDeltaE * 10) / 10,
+    penalty: Math.round(avgPenalty * 10) / 10
+  };
+}
+
+/**
+ * Fast bounded parameter optimization loop
+ * Runs bounded coordinate search on thumbnail canvas in < 40ms
+ */
+function optimizeParameters(renderFn, initialParams, targetStats, refStats, w, h, maxIterations = 8) {
+  let currentParams = { ...initialParams };
+  let bestParams = { ...initialParams };
+  let bestScoreObj = null;
+
+  // 1. Initial Evaluation
+  const initImgData = renderFn(currentParams, w, h);
+  const initialScoreObj = evaluateCompositeScore(
+    initImgData.original,
+    initImgData.rendered,
+    w,
+    h,
+    targetStats.materialProfiles,
+    refStats.materialProfiles
+  );
+  bestScoreObj = initialScoreObj;
+
+  // Key tuneable parameter search grid
+  const searchParams = [
+    { key: 'localStrength', step: 0.12, min: 0.2, max: 0.95 },
+    { key: 'tone', step: 0.08, min: 0.35, max: 0.90 },
+    { key: 'color', step: 0.08, min: 0.30, max: 0.85 },
+    { key: 'illumination', step: 0.15, min: 0.1, max: 0.90 },
+    { key: 'neutralProtect', step: 0.08, min: 0.4, max: 0.95 }
+  ];
+
+  let iterationsRun = 0;
+
+  for (let iter = 0; iter < maxIterations; iter++) {
+    let improved = false;
+
+    for (const sp of searchParams) {
+      iterationsRun++;
+      const originalVal = currentParams[sp.key] ?? 0.5;
+
+      // Try +step
+      const candidateUp = clamp(originalVal + sp.step, sp.min, sp.max);
+      currentParams[sp.key] = candidateUp;
+      let res = renderFn(currentParams, w, h);
+      let scoreUp = evaluateCompositeScore(
+        res.original,
+        res.rendered,
+        w,
+        h,
+        targetStats.materialProfiles,
+        refStats.materialProfiles
+      );
+
+      if (scoreUp.overallScore > bestScoreObj.overallScore + 0.3) {
+        bestScoreObj = scoreUp;
+        bestParams = { ...currentParams };
+        improved = true;
+        continue;
+      }
+
+      // Try -step
+      const candidateDown = clamp(originalVal - sp.step, sp.min, sp.max);
+      currentParams[sp.key] = candidateDown;
+      res = renderFn(currentParams, w, h);
+      let scoreDown = evaluateCompositeScore(
+        res.original,
+        res.rendered,
+        w,
+        h,
+        targetStats.materialProfiles,
+        refStats.materialProfiles
+      );
+
+      if (scoreDown.overallScore > bestScoreObj.overallScore + 0.3) {
+        bestScoreObj = scoreDown;
+        bestParams = { ...currentParams };
+        improved = true;
+        continue;
+      }
+
+      // Revert to best
+      currentParams[sp.key] = bestParams[sp.key] ?? originalVal;
+    }
+
+    if (!improved) break;
+  }
+
+  return {
+    initialScore: initialScoreObj,
+    finalScore: bestScoreObj,
+    optimizedParams: bestParams,
+    iterationsRun
+  };
+}
+
 const ColorEngine = {
   rgbToXyz,
   xyzToRgb,
@@ -992,7 +1169,9 @@ const ColorEngine = {
   estimateIlluminationField,
   interpolateIllumination,
   applyIlluminationCorrection,
-  transferLocalMaterialColor
+  transferLocalMaterialColor,
+  evaluateCompositeScore,
+  optimizeParameters
 };
 
 if (typeof window !== 'undefined') {

@@ -29,7 +29,9 @@ const {
   estimateIlluminationField,
   interpolateIllumination,
   applyIlluminationCorrection,
-  transferLocalMaterialColor
+  transferLocalMaterialColor,
+  evaluateCompositeScore,
+  optimizeParameters
 } = ColorEngine;
 
 export default ColorEngine;
@@ -60,5 +62,7 @@ export {
   estimateIlluminationField,
   interpolateIllumination,
   applyIlluminationCorrection,
-  transferLocalMaterialColor
+  transferLocalMaterialColor,
+  evaluateCompositeScore,
+  optimizeParameters
 };
